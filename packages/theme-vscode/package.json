@@ -1,6 +1,6 @@
 {
-  "name": "@krassowski/theme-vscode",
-  "version": "2.1.0",
+  "name": "@jupyter-lsp/theme-vscode",
+  "version": "2.1.1",
   "description": "VSCode theme for JupyterLab-LSP",
   "keywords": [
     "jupyter",
@@ -12,20 +12,21 @@
     "vscode",
     "completer"
   ],
-  "homepage": "https://github.com/krassowski/jupyterlab-lsp",
+  "homepage": "https://github.com/jupyter-lsp/jupyterlab-lsp",
   "bugs": {
-    "url": "https://github.com/krassowski/jupyterlab-lsp/issues"
+    "url": "https://github.com/jupyter-lsp/jupyterlab-lsp/issues"
   },
   "license": "BSD-3-Clause",
   "author": "JupyterLab-LSP Development Team",
   "files": [
-    "{lib,style,schema,src}/**/*.{d.ts,eot,gif,html,jpg,js,js.map,json,png,svg,woff2,ttf,css,json,ts,tsx,txt,md}"
+    "{lib,style,schema,src}/**/*.{d.ts,eot,gif,html,jpg,js,js.map,json,png,svg,woff2,ttf,css,json,ts,tsx,txt,md}",
+    "LICENSE"
   ],
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "repository": {
     "type": "git",
-    "url": "https://github.com/krassowski/jupyterlab-lsp.git"
+    "url": "https://github.com/jupyter-lsp/jupyterlab-lsp.git"
   },
   "scripts": {
     "build": "tsc -b",
@@ -33,13 +34,13 @@
     "clean": "rimraf lib"
   },
   "dependencies": {
-    "@krassowski/completion-theme": "~3.0.0"
+    "@jupyter-lsp/completion-theme": "^3.0.0"
   },
   "devDependencies": {},
   "peerDependencies": {},
   "jupyterlab": {
     "extension": true,
     "schemaDir": "schema",
-    "outputDir": "../../python_packages/jupyterlab_lsp/jupyterlab_lsp/labextensions/@krassowski/theme-vscode"
+    "outputDir": "../../python_packages/jupyterlab_lsp/jupyterlab_lsp/labextensions/@jupyter-lsp/theme-vscode"
   }
 }

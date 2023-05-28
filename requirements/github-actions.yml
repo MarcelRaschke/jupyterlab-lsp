@@ -6,18 +6,29 @@ channels:
 
 dependencies:
   - jupyterlab {lab}
+  # to test serverextension
+  - notebook
   # build dependencies
   - pip
   - nodejs {nodejs}
   # for python language server (and development)
+  - python-lsp-server
   - flake8 >=3.5
+  - autopep8 <1.6.0
+  # robotframework for testing and language server
+  - jupyterlab_robotmode
+  - robotframework >=4
+  - robotframework-lsp
+  - robotframework-robocop
+  - robotkernel
   # for R language server and kernel
-  # TODO: try r 4.0 soon
-  - r <4
+  - r {r}
   - r-irkernel
   - r-languageserver
   - r-stringi >=1.4.6
   - rpy2
+  # bash-language-server
+  - shellcheck
   # tex
   - tectonic
   - texlab
@@ -25,7 +36,12 @@ dependencies:
   # test tools
   - pytest-asyncio
   - pytest-cov
-  - pytest-flake8
+  # temporary pin added on 2022-12-28, if editing this file try to remove it:
+  # pytoolconfig 1.2.4 depends on packaging>=22.0 which breaks `pip check`
+  - pytoolconfig <1.2.4
+  # see https://github.com/conda-forge/pytest-flake8-feedstock/issues/20
+  # and https://github.com/tholo/pytest-flake8/issues/86
+  - pytest-flake8 <1.1.1
   - pytest-runner
   - ruamel_yaml
   - pytest-github-actions-annotate-failures
@@ -33,6 +49,4 @@ dependencies:
   - bs4
   - firefox
   - geckodriver
-  - robotframework >=4
   - robotframework-seleniumlibrary
-  - python-lsp-server

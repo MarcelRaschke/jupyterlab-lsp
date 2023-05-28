@@ -1,9 +1,12 @@
 import { JupyterFrontEnd } from '@jupyterlab/application';
+import { Dialog, showDialog } from '@jupyterlab/apputils';
 import { CodeEditor } from '@jupyterlab/codeeditor';
 import { DocumentRegistry, IDocumentWidget } from '@jupyterlab/docregistry';
+import { ILogPayload } from '@jupyterlab/logconsole';
 import { nullTranslator, TranslationBundle } from '@jupyterlab/translation';
 import { JSONObject } from '@lumino/coreutils';
 import { Signal } from '@lumino/signaling';
+import mergeWith from 'lodash.mergewith';
 
 import { ICommandContext } from '../command_manager';
 import { LSPConnection } from '../connection';
@@ -15,12 +18,14 @@ import {
 import { EditorAdapter } from '../editor_integration/editor_adapter';
 import { IFeature, IFeatureEditorIntegration } from '../feature';
 import { ILSPExtension, ILSPLogConsole } from '../index';
-import { LanguageIdentifier } from '../lsp';
+import { ClientCapabilities, LanguageIdentifier } from '../lsp';
 import { IRootPosition, IVirtualPosition } from '../positioning';
 import { IForeignContext, VirtualDocument } from '../virtual/document';
 import { IVirtualEditor } from '../virtual/editor';
 
 import IEditor = CodeEditor.IEditor;
+import IButton = Dialog.IButton;
+import createButton = Dialog.createButton;
 
 export class StatusMessage {
   /**
@@ -28,7 +33,7 @@ export class StatusMessage {
    */
   message: string;
   changed: Signal<StatusMessage, void>;
-  private timer: number;
+  private timer: number | null;
 
   constructor() {
     this.message = '';
@@ -104,6 +109,7 @@ export abstract class WidgetAdapter<T extends IDocumentWidget> {
   public editorAdded: Signal<WidgetAdapter<T>, IEditorChangedData>;
   public editorRemoved: Signal<WidgetAdapter<T>, IEditorChangedData>;
   public update_finished: Promise<void>;
+  public initialized: Promise<void>;
 
   /**
    * (re)create virtual document using current path and language
@@ -178,11 +184,11 @@ export abstract class WidgetAdapter<T extends IDocumentWidget> {
     this.disconnect();
 
     // just to be sure
-    this.virtual_editor = null;
-    this.app = null;
-    this.widget = null;
-    this.connection_manager = null;
-    this.widget = null;
+    this.virtual_editor = null as any;
+    this.app = null as any;
+    this.widget = null as any;
+    this.connection_manager = null as any;
+    this.widget = null as any;
 
     this.isDisposed = true;
   }
@@ -217,7 +223,7 @@ export abstract class WidgetAdapter<T extends IDocumentWidget> {
     }
   }
 
-  abstract get language_file_extension(): string;
+  abstract get language_file_extension(): string | undefined;
 
   disconnect() {
     this.connection_manager.unregister_document(
@@ -273,17 +279,26 @@ export abstract class WidgetAdapter<T extends IDocumentWidget> {
       return;
     }
 
-    if (state === 'completed') {
+    // TODO: remove workaround no later than with 3.2 release of JupyterLab
+    // workaround for https://github.com/jupyterlab/jupyterlab/issues/10721
+    // while already reverted in https://github.com/jupyterlab/jupyterlab/pull/10741,
+    // it was not released yet and many users will continue to run 3.1.0 and 3.1.1
+    // so lets workaround it for now
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore
+    const completedManually = state === 'completed manually';
+
+    if (state === 'completed' || completedManually) {
       // note: must only be send to the appropriate connections as
       // some servers (Julia) break if they receive save notification
       // for a document that was not opened before, see:
-      // https://github.com/krassowski/jupyterlab-lsp/issues/490
+      // https://github.com/jupyter-lsp/jupyterlab-lsp/issues/490
       const documents_to_save = [this.virtual_editor.virtual_document];
 
       for (let virtual_document of documents_to_save) {
         let connection = this.connection_manager.connections.get(
           virtual_document.uri
-        );
+        )!;
         this.console.log(
           'Sending save notification for',
           virtual_document.uri,
@@ -298,7 +313,7 @@ export abstract class WidgetAdapter<T extends IDocumentWidget> {
     }
   }
 
-  abstract activeEditor: CodeEditor.IEditor;
+  abstract activeEditor: CodeEditor.IEditor | undefined;
 
   abstract get editors(): CodeEditor.IEditor[];
 
@@ -331,7 +346,13 @@ export abstract class WidgetAdapter<T extends IDocumentWidget> {
     this.adapterConnected.emit(data);
     this.isConnected = true;
 
-    await this.update_documents().then(() => {
+    const promise = this.update_documents();
+
+    if (!promise) {
+      this.console.warn('Could not update documents');
+      return;
+    }
+    await promise.then(() => {
       // refresh the document on the LSP server
       this.document_changed(virtual_document, virtual_document, true);
 
@@ -341,6 +362,90 @@ export abstract class WidgetAdapter<T extends IDocumentWidget> {
         'have been initialized'
       );
     });
+
+    // Note: the logger extension behaves badly with non-default names
+    // as it changes the source to the active file afterwards anyways
+    const loggerSourceName = virtual_document.uri;
+    let log: (text: string) => void;
+    if (this.extension.user_console) {
+      const logger = this.extension.user_console.getLogger(loggerSourceName);
+      log = (text: string) => {
+        logger.log({
+          type: 'text',
+          data: text
+        } as ILogPayload);
+      };
+    } else {
+      log = (text: string) => console.log(text);
+    }
+
+    data.connection.serverNotifications['$/logTrace'].connect(
+      (connection, message) => {
+        this.console.log(
+          data.connection.serverIdentifier,
+          'trace',
+          virtual_document.uri,
+          message
+        );
+      }
+    );
+
+    data.connection.serverNotifications['window/logMessage'].connect(
+      (connection, message) => {
+        this.console.log(
+          data.connection.serverIdentifier,
+          virtual_document.uri,
+          message
+        );
+        log(connection.serverIdentifier + ': ' + message.message);
+      }
+    );
+
+    data.connection.serverNotifications['window/showMessage'].connect(
+      (connection, message) => {
+        this.console.log(
+          data.connection.serverIdentifier,
+          virtual_document.uri,
+          message.message
+        );
+        void showDialog({
+          title: this.trans.__('Message from ') + connection.serverIdentifier,
+          body: message.message
+        });
+      }
+    );
+
+    data.connection.serverRequests['window/showMessageRequest'].setHandler(
+      async params => {
+        this.console.log(
+          data.connection.serverIdentifier,
+          virtual_document.uri,
+          params
+        );
+        const actionItems = params.actions;
+        const buttons = actionItems
+          ? actionItems.map(action => {
+              return createButton({
+                label: action.title
+              });
+            })
+          : [createButton({ label: this.trans.__('Dismiss') })];
+        const result = await showDialog<IButton>({
+          title:
+            this.trans.__('Message from ') + data.connection.serverIdentifier,
+          body: params.message,
+          buttons: buttons
+        });
+        const choice = buttons.indexOf(result.button);
+        if (choice === -1) {
+          return null;
+        }
+        if (actionItems) {
+          return actionItems[choice];
+        }
+        return null;
+      }
+    );
   }
 
   /**
@@ -383,7 +488,7 @@ export abstract class WidgetAdapter<T extends IDocumentWidget> {
 
   private create_virtual_editor(
     options: IVirtualEditor.IOptions
-  ): IVirtualEditor<IEditor> {
+  ): IVirtualEditor<IEditor> | null {
     let editorType = this.extension.editor_type_manager.findBestImplementation(
       this.editors
     );
@@ -462,7 +567,7 @@ export abstract class WidgetAdapter<T extends IDocumentWidget> {
     let connection = this.connection_manager.connections.get(
       virtual_document.uri
     );
-    let adapter = this.adapters.get(virtual_document.id_path);
+    let adapter = this.adapters.get(virtual_document.id_path)!;
 
     if (!connection?.isReady) {
       this.console.log('Skipping document update signal: connection not ready');
@@ -503,7 +608,7 @@ export abstract class WidgetAdapter<T extends IDocumentWidget> {
   connect_adapter(
     virtual_document: VirtualDocument,
     connection: LSPConnection,
-    features: IFeature[] = null
+    features: IFeature[] | null = null
   ): EditorAdapter<any> {
     let adapter = this.create_adapter(virtual_document, connection, features);
     this.adapters.set(virtual_document.id_path, adapter);
@@ -528,7 +633,31 @@ export abstract class WidgetAdapter<T extends IDocumentWidget> {
 
     this.console.log(`will connect using language: ${language}`);
 
+    let capabilities: ClientCapabilities = {
+      textDocument: {
+        synchronization: {
+          dynamicRegistration: true,
+          willSave: false,
+          didSave: true,
+          willSaveWaitUntil: false
+        }
+      },
+      workspace: {
+        didChangeConfiguration: {
+          dynamicRegistration: true
+        }
+      }
+    };
+
+    for (const feature of this.extension.feature_manager.features) {
+      if (!feature.capabilities) {
+        continue;
+      }
+      capabilities = mergeWith(capabilities, feature.capabilities);
+    }
+
     let options: ISocketConnectionOptions = {
+      capabilities,
       virtual_document,
       language,
       document_path: this.document_path
@@ -536,12 +665,16 @@ export abstract class WidgetAdapter<T extends IDocumentWidget> {
 
     let connection = await this.connection_manager.connect(options);
 
-    await this.on_connected({ virtual_document, connection });
+    if (connection) {
+      await this.on_connected({ virtual_document, connection });
 
-    return {
-      connection,
-      virtual_document
-    };
+      return {
+        connection,
+        virtual_document
+      };
+    } else {
+      return undefined;
+    }
   }
 
   /**
@@ -564,7 +697,7 @@ export abstract class WidgetAdapter<T extends IDocumentWidget> {
   private create_adapter(
     virtual_document: VirtualDocument,
     connection: LSPConnection,
-    features: IFeature[] = null
+    features: IFeature[] | null = null
   ): EditorAdapter<IVirtualEditor<IEditor>> {
     let adapter_features = new Array<
       IFeatureEditorIntegration<IVirtualEditor<IEditor>>
@@ -575,16 +708,15 @@ export abstract class WidgetAdapter<T extends IDocumentWidget> {
     }
 
     for (let feature of features) {
-      let featureEditorIntegrationConstructor = feature.editorIntegrationFactory.get(
-        this.virtual_editor.editor_name
-      );
+      let featureEditorIntegrationConstructor =
+        feature.editorIntegrationFactory.get(this.virtual_editor.editor_name)!;
       let integration = new featureEditorIntegrationConstructor({
         feature: feature,
         virtual_editor: this.virtual_editor,
         virtual_document: virtual_document,
         connection: connection,
         status_message: this.status_message,
-        settings: feature.settings,
+        settings: feature.settings!,
         adapter: this,
         trans: this.trans
       });
@@ -605,16 +737,25 @@ export abstract class WidgetAdapter<T extends IDocumentWidget> {
 
   private async onContentChanged(_slot: any) {
     // update the virtual documents (sending the updates to LSP is out of scope here)
-    this.update_finished = this.update_documents().catch(this.console.warn);
+    const promise = this.update_documents();
+    if (!promise) {
+      this.console.warn('Could not update documents');
+      return;
+    }
+    this.update_finished = promise.catch(this.console.warn);
     await this.update_finished;
   }
 
-  get_position_from_context_menu(): IRootPosition {
+  get_position_from_context_menu(): IRootPosition | null {
     // Note: could also try using this.app.contextMenu.menu.contentNode position.
     // Note: could add a guard on this.app.contextMenu.menu.isAttached
 
     // get the first node as it gives the most accurate approximation
     let leaf_node = this.app.contextMenuHitTest(() => true);
+
+    if (!leaf_node) {
+      return null;
+    }
 
     let { left, top } = leaf_node.getBoundingClientRect();
 
@@ -638,25 +779,31 @@ export abstract class WidgetAdapter<T extends IDocumentWidget> {
 
   abstract context_from_active_document(): ICommandContext | null;
 
-  get_context(root_position: IRootPosition): ICommandContext {
+  get_context(root_position: IRootPosition): ICommandContext | null {
+    // ignore premature calls and calls after disposal
+    if (!this.virtual_editor) {
+      return null;
+    }
     let document = this.virtual_editor.document_at_root_position(root_position);
-    let virtual_position = this.virtual_editor.root_position_to_virtual_position(
-      root_position
-    );
+    let virtual_position =
+      this.virtual_editor.root_position_to_virtual_position(root_position);
     return {
       document,
       connection: this.connection_manager.connections.get(document.uri),
       virtual_position,
       root_position,
-      features: this.get_features(document),
+      features: this.get_features(document)!,
       editor: this.virtual_editor,
       app: this.app,
       adapter: this
     };
   }
 
-  get_context_from_context_menu(): ICommandContext {
+  get_context_from_context_menu(): ICommandContext | null {
     let root_position = this.get_position_from_context_menu();
+    if (!root_position) {
+      return null;
+    }
     return this.get_context(root_position);
   }
 

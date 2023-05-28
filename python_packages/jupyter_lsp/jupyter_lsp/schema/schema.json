@@ -126,6 +126,11 @@
           "title": "Extensions",
           "type": "array"
         },
+        "requires_documents_on_disk": {
+          "default": true,
+          "description": "Whether to write un-saved documents to disk in a transient `.virtual_documents` directory. Well-behaved language servers that work against in-memory files should set this to `false`, which will become the default in the future.",
+          "type": "boolean"
+        },
         "install": {
           "$ref": "#/definitions/install-bundle",
           "description": "a list of installation approaches keyed by package manager, e.g. pip, npm, yarn, apt",
@@ -138,6 +143,11 @@
           "$ref": "#/definitions/language-list",
           "description": "list of MIME types supported by the language server",
           "title": "MIME Types"
+        },
+        "troubleshoot": {
+          "type": "string",
+          "description": "information on troubleshooting the installation or auto-detection of the language server",
+          "title": "Troubleshooting"
         },
         "urls": {
           "additionalProperties": {
@@ -156,6 +166,11 @@
         },
         "version": {
           "$ref": "#/definitions/current-version"
+        },
+        "workspace_configuration": {
+          "description": "default values to include in the client `workspace/configuration` reply (also known as `serverSettings`). User may override these defaults. The keys should be fully qualified (dotted) names of settings (nested specification is not supported).",
+          "title": "Workspace configuration",
+          "type": "object"
         }
       },
       "title": "Server Spec Properties"
@@ -164,6 +179,9 @@
       "properties": {
         "sessions": {
           "$ref": "#/definitions/sessions"
+        },
+        "specs": {
+          "$ref": "#/definitions/language-server-specs-implementation-map"
         },
         "version": {
           "$ref": "#/definitions/current-version"

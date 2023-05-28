@@ -1,24 +1,28 @@
 *** Settings ***
-Suite Setup       Setup Suite For Screenshots    completion
-Test Setup        Setup Completion Test
-Test Teardown     Clean Up After Working With File    Completion.ipynb
-Force Tags        feature:completion
-Resource          ../Keywords.robot
+Resource            ../Keywords.resource
+
+Suite Setup         Setup Suite For Screenshots    completion
+Test Setup          Setup Completion Test
+Test Teardown       Clean Up After Working With File    Completion.ipynb
+
+Test Tags           feature:completion
+
 
 *** Variables ***
-${COMPLETER_BOX}    css:.jp-Completer.jp-HoverBox
-${DOCUMENTATION_PANEL}    css:.jp-Completer-docpanel
-${KERNEL_BUSY_INDICATOR}    css:.jp-NotebookPanel-toolbar div[title="Kernel Busy"]
+${COMPLETER_BOX}            css:.jp-Completer.jp-HoverBox
+${DOCUMENTATION_PANEL}      css:.jp-Completer-docpanel
+${KERNEL_BUSY_INDICATOR}    css:.jp-Notebook-ExecutionIndicator[data-status="busy"]
+
 
 *** Test Cases ***
 Works When Kernel Is Idle
-    Configure JupyterLab Plugin    {"kernelResponseTimeout": -1, "waitForBusyKernel": false}    plugin id=${COMPLETION PLUGIN ID}
-    [Documentation]    The suggestions from kernel and LSP should get integrated.
+    [Documentation]    The suggestions from kernel and LSP should get integrated; operates in case insensitive mode
+    Configure JupyterLab Plugin    {"kernelResponseTimeout": -1, "waitForBusyKernel": false, "caseSensitive": false}
+    ...    plugin id=${COMPLETION PLUGIN ID}
     Enter Cell Editor    1    line=2
     Capture Page Screenshot    01-entered-cell.png
     Trigger Completer
     Capture Page Screenshot    02-completions-shown.png
-    # lowercase and uppercase suggestions:
     Completer Should Suggest    TabError
     # this comes from LSP:
     Completer Should Suggest    test
@@ -29,8 +33,19 @@ Works When Kernel Is Idle
     ${content} =    Get Cell Editor Content    1
     Should Contain    ${content}    TabError
 
+Filters Completions In Case Sensitive Mode
+    [Documentation]    Completions filtering is case-sensitive when caseSensitive is true
+    Configure JupyterLab Plugin    {"caseSensitive": true}    plugin id=${COMPLETION PLUGIN ID}
+    Enter Cell Editor    1    line=2
+    Trigger Completer
+    Completer Should Suggest    test
+    Completer Should Not Suggest    TabError
+
 Can Prioritize Kernel Completions
-    Configure JupyterLab Plugin    {"kernelCompletionsFirst": true, "kernelResponseTimeout": -1}    plugin id=${COMPLETION PLUGIN ID}
+    # note: disabling pre-filtering to get ranking without match scoring
+    Configure JupyterLab Plugin
+    ...    {"kernelCompletionsFirst": true, "kernelResponseTimeout": -1, "preFilterMatches": false}
+    ...    plugin id=${COMPLETION PLUGIN ID}
     Enter Cell Editor    1    line=2
     Trigger Completer
     Completer Should Suggest    %%timeit
@@ -39,7 +54,10 @@ Can Prioritize Kernel Completions
     Should Be True    ${kernel_position} < ${lsp_position}
 
 Can Prioritize LSP Completions
-    Configure JupyterLab Plugin    {"kernelCompletionsFirst": false, "kernelResponseTimeout": -1}    plugin id=${COMPLETION PLUGIN ID}
+    # note: disabling pre-filtering to get ranking without match scoring
+    Configure JupyterLab Plugin
+    ...    {"kernelCompletionsFirst": false, "kernelResponseTimeout": -1, "preFilterMatches": false}
+    ...    plugin id=${COMPLETION PLUGIN ID}
     Enter Cell Editor    1    line=2
     Trigger Completer
     Completer Should Suggest    %%timeit
@@ -48,28 +66,35 @@ Can Prioritize LSP Completions
     Should Be True    ${kernel_position} > ${lsp_position}
 
 Invalidates On Cell Change
+    # this test seems to crash Jedi (highlights crash on
+    # `usages = document.jedi_script().get_references(**code_position)`
     Enter Cell Editor    1    line=2
     Press Keys    None    TAB
     Enter Cell Editor    2
-    # just to increase chances of caching this on CI (which is slow)
-    Sleep    5s
+    # just to increase chances of catching this on CI (which is slow)
+    Sleep    4s
     Completer Should Not Suggest    test
 
 Invalidates On Focus Loss
     Enter Cell Editor    1    line=2
     Press Keys    None    TAB
-    Enter Cell Editor    2
-    # just to increase chances of caching this on CI (which is slow)
-    Sleep    5s
+    Click JupyterLab Menu    File
+    # just to increase chances of catching this on CI (which is slow)
+    Sleep    4s
     Completer Should Not Suggest    test
+    Enter Cell Editor    1    line=2
 
 Uses LSP Completions When Kernel Resoponse Times Out
-    Configure JupyterLab Plugin    {"kernelResponseTimeout": 1, "waitForBusyKernel": true}    plugin id=${COMPLETION PLUGIN ID}
+    [Tags]    requires:busy-indicator
+    Configure JupyterLab Plugin    {"kernelResponseTimeout": 1, "waitForBusyKernel": true}
+    ...    plugin id=${COMPLETION PLUGIN ID}
     Should Complete While Kernel Is Busy
 
 Uses LSP Completions When Kernel Is Busy
     [Documentation]    When kernel is not available the best thing is to show some suggestions (LSP) rather than none.
-    Configure JupyterLab Plugin    {"kernelResponseTimeout": -1, "waitForBusyKernel": false}    plugin id=${COMPLETION PLUGIN ID}
+    [Tags]    requires:busy-indicator
+    Configure JupyterLab Plugin    {"kernelResponseTimeout": -1, "waitForBusyKernel": false}
+    ...    plugin id=${COMPLETION PLUGIN ID}
     Should Complete While Kernel Is Busy
 
 Works When Kernel Is Shut Down
@@ -120,16 +145,18 @@ Completes In Strings Or Python Dictionaries
     Wait Until Keyword Succeeds    40x    0.5s    File Editor Line Should Equal    15    test_dict['key_a']
     [Teardown]    Clean Up After Working With File    completion.py
 
-Continious Hinting Works
+Continuous Hinting Works
+    [Setup]    Prepare File for Editing    Python    completion    completion.py
     Configure JupyterLab Plugin    {"continuousHinting": true}    plugin id=${COMPLETION PLUGIN ID}
-    Prepare File for Editing    Python    completion    completion.py
     Place Cursor In File Editor At    9    2
-    Capture Page Screenshot    01-editor-ready.png
+    Wait For Ready State
     Press Keys    None    d
+    Wait For Ready State
     Completer Should Suggest    addition
     # gh430 - auto invoke after dot should work too
     Press Keys    None    .
     Completer Should Suggest    __doc__
+    [Teardown]    Clean Up After Working With File    completion.py
 
 Autocompletes If Only One Option
     Enter Cell Editor    3    line=1
@@ -155,6 +182,7 @@ Does Not Autocomplete If Multiple Options
     Completer Should Suggest    copy
 
 User Can Select Lowercase After Starting Uppercase
+    Configure JupyterLab Plugin    {"caseSensitive": false}    plugin id=${COMPLETION PLUGIN ID}
     # `from time import Tim<tab>` → `from time import time`
     Enter Cell Editor    5    line=1
     Trigger Completer
@@ -165,7 +193,7 @@ User Can Select Lowercase After Starting Uppercase
 Mid Token Completions Do Not Overwrite
     # `disp<tab>data` → `display_table<cursor>data`
     Place Cursor In Cell Editor At    9    line=1    character=4
-    Capture Page Screenshot    01-cursor-placed.png
+    Wait For Our Completer To Replace Native In Cell    9
     Trigger Completer
     Completer Should Suggest    display_table
     Select Completer Suggestion    display_table
@@ -173,8 +201,11 @@ Mid Token Completions Do Not Overwrite
     Wait Until Keyword Succeeds    40x    0.5s    Cell Editor Should Equal    9    display_tabledata
     # `disp<tab>lay` → `display_table<cursor>`
     Place Cursor In Cell Editor At    11    line=1    character=4
+    Wait For Our Completer To Replace Native In Cell    11
     Trigger Completer
+    Wait For Ready State
     Completer Should Suggest    display_table
+    Wait For Ready State
     Select Completer Suggestion    display_table
     Wait Until Keyword Succeeds    40x    0.5s    Cell Editor Should Equal    11    display_table
 
@@ -188,14 +219,15 @@ Completion Works For Tokens Separated By Space
 
 Kernel And LSP Completions Merge Prefix Conflicts Are Resolved
     [Documentation]    Reconciliate Python kernel returning prefixed completions and LSP (pylsp) not-prefixed ones
-    Configure JupyterLab Plugin    {"kernelResponseTimeout": -1, "waitForBusyKernel": false}    plugin id=${COMPLETION PLUGIN ID}
-    # For more details see: https://github.com/krassowski/jupyterlab-lsp/issues/30#issuecomment-576003987
-    # `import os.pat<tab>` → `import os.pathsep`
+    Configure JupyterLab Plugin    {"kernelResponseTimeout": -1, "waitForBusyKernel": false}
+    ...    plugin id=${COMPLETION PLUGIN ID}
+    # For more details see: https://github.com/jupyter-lsp/jupyterlab-lsp/issues/30#issuecomment-576003987
+    # `import os.pat<tab>` → `import os.path`
     Enter Cell Editor    15    line=1
     Trigger Completer
-    Completer Should Suggest    pathsep
-    Select Completer Suggestion    pathsep
-    Wait Until Keyword Succeeds    40x    0.5s    Cell Editor Should Equal    15    import os.pathsep
+    Completer Should Suggest    path
+    Select Completer Suggestion    path
+    Wait Until Keyword Succeeds    40x    0.5s    Cell Editor Should Equal    15    import os.path
 
 Triggers Completer On Dot
     Enter Cell Editor    2    line=1
@@ -205,7 +237,7 @@ Triggers Completer On Dot
     Completer Should Suggest    append
 
 Material Theme Works
-    Configure JupyterLab Plugin    {"theme": "material"}    plugin id=${COMPLETION PLUGIN ID}
+    Configure JupyterLab Plugin    {"theme": "material", "caseSensitive": false}    plugin id=${COMPLETION PLUGIN ID}
     Capture Page Screenshot    01-configured.png
     Enter Cell Editor    1    line=2
     Trigger Completer
@@ -216,7 +248,7 @@ Material Theme Works
     Completer Should Include Icon    lsp:material-class-light
 
 VSCode Theme Works
-    Configure JupyterLab Plugin    {"theme": "vscode"}    plugin id=${COMPLETION PLUGIN ID}
+    Configure JupyterLab Plugin    {"theme": "vscode", "caseSensitive": false}    plugin id=${COMPLETION PLUGIN ID}
     Capture Page Screenshot    01-configured.png
     Enter Cell Editor    1    line=2
     Trigger Completer
@@ -229,7 +261,7 @@ VSCode Dark Theme Works
     Lab Command    Use Theme: JupyterLab Dark
     Wait For Splash
     Capture Page Screenshot    00-theme-changed.png
-    Configure JupyterLab Plugin    {"theme": "vscode"}    plugin id=${COMPLETION PLUGIN ID}
+    Configure JupyterLab Plugin    {"theme": "vscode", "caseSensitive": false}    plugin id=${COMPLETION PLUGIN ID}
     Capture Page Screenshot    01-configured.png
     Open ${file} in ${MENU NOTEBOOK}
     Wait Until Fully Initialized
@@ -242,7 +274,7 @@ VSCode Dark Theme Works
     Wait For Splash
 
 Works Without A Theme
-    Configure JupyterLab Plugin    {"theme": null}    plugin id=${COMPLETION PLUGIN ID}
+    Configure JupyterLab Plugin    {"theme": null, "caseSensitive": false}    plugin id=${COMPLETION PLUGIN ID}
     Capture Page Screenshot    01-configured.png
     Enter Cell Editor    1    line=2
     Trigger Completer
@@ -251,7 +283,8 @@ Works Without A Theme
     Wait Until Page Contains Element    ${COMPLETER_BOX} .jp-Completer-monogram
 
 Works With Incorrect Theme
-    Configure JupyterLab Plugin    {"theme": "a-non-existing-theme"}    plugin id=${COMPLETION PLUGIN ID}
+    Configure JupyterLab Plugin    {"theme": "a-non-existing-theme", "caseSensitive": false}
+    ...    plugin id=${COMPLETION PLUGIN ID}
     Capture Page Screenshot    01-configured.png
     Enter Cell Editor    1    line=2
     Trigger Completer
@@ -263,6 +296,7 @@ Completes Correctly With R Double And Triple Colon
     [Setup]    Prepare File for Editing    R    completion    completion.R
     Place Cursor In File Editor At    2    7
     Wait Until Fully Initialized
+    Wait For Our Completer To Replace Native In File Editor
     Trigger Completer
     Completer Should Suggest    .print.via.format
     Select Completer Suggestion    .print.via.format
@@ -287,6 +321,7 @@ Shows Documentation With CompletionItem Resolve
     [Setup]    Prepare File for Editing    R    completion    completion.R
     Place Cursor In File Editor At    8    7
     Wait Until Fully Initialized
+    Wait For Our Completer To Replace Native In File Editor
     Trigger Completer
     Completer Should Suggest    print.data.frame
     # if data.frame is not active, activate it (it should be in top 10 on any platform)
@@ -299,7 +334,7 @@ Shows Documentation With CompletionItem Resolve
     [Teardown]    Clean Up After Working With File    completion.R
 
 Shows Only Relevant Suggestions In Known Magics
-    # https://github.com/krassowski/jupyterlab-lsp/issues/559
+    # https://github.com/jupyter-lsp/jupyterlab-lsp/issues/559
     # h<tab>
     Enter Cell Editor    20    line=2
     Trigger Completer
@@ -313,6 +348,7 @@ Completes In R Magics
     # - R lanugage server is very sensitive to off-by-one errors (see https://github.com/REditorSupport/languageserver/issues/395)
     # '%%R\n librar<tab>'
     Enter Cell Editor    22    line=2
+    Wait For Our Completer To Replace Native In Cell    22
     Trigger Completer
     Completer Should Suggest    library
     # '%R lib<tab>'
@@ -320,18 +356,29 @@ Completes In R Magics
     Trigger Completer
     Completer Should Suggest    library
 
+Completes Paths In Strings
+    Enter Cell Editor    26
+    Wait For Our Completer To Replace Native In Cell    26
+    Press Keys    None    LEFT
+    Trigger Completer
+    Press Keys    None    ENTER
+    Wait Until Keyword Succeeds    40x    0.5s    Cell Editor Should Equal    26    '../Completion.ipynb'
+
+
 *** Keywords ***
 Setup Completion Test
     Setup Notebook    Python    Completion.ipynb
 
 Get Cell Editor Content
     [Arguments]    ${cell_nr}
-    ${content}    Execute JavaScript    return document.querySelector('.jp-Cell:nth-child(${cell_nr}) .CodeMirror').CodeMirror.getValue()
-    [Return]    ${content}
+    ${content} =    Execute JavaScript
+    ...    return document.querySelector('.jp-Cell:nth-child(${cell_nr}) .CodeMirror').CodeMirror.getValue()
+    RETURN    ${content}
 
 Get File Editor Content
-    ${content}    Execute JavaScript    return document.querySelector('.jp-FileEditorCodeWrapper .CodeMirror').CodeMirror.getValue()
-    [Return]    ${content}
+    ${content} =    Execute JavaScript
+    ...    return document.querySelector('.jp-FileEditorCodeWrapper .CodeMirror').CodeMirror.getValue()
+    RETURN    ${content}
 
 Cell Editor Should Equal
     [Arguments]    ${cell}    ${value}
@@ -353,7 +400,7 @@ Activate Completer Suggestion
         Capture Page Screenshot    ${i}-completions.png
         ${matching_active_elements} =    Get Element Count    ${active_suggestion}
         LOG    ${matching_active_elements}
-        Exit For Loop If    ${matching_active_elements} == 1
+        IF    ${matching_active_elements} == 1    BREAK
         Press Keys    None    DOWN
         Sleep    0.1s
     END
@@ -362,19 +409,21 @@ Activate Completer Suggestion
 Select Completer Suggestion
     [Arguments]    ${text}
     ${suggestion} =    Set Variable    css:.jp-Completer-item[data-value="${text}"]
-    Wait Until Element Is Visible    ${suggestion}    timeout=10s
+    Wait Until Element Is Visible    ${suggestion}    timeout=15s
+    Scroll Element Into View    ${suggestion}
     Mouse Over    ${suggestion}
     Click Element    ${suggestion} code
 
 Completer Should Suggest
     [Arguments]    ${text}    ${timeout}=10s
-    Wait Until Page Contains Element    ${COMPLETER_BOX} .jp-Completer-item[data-value="${text}"]    timeout=${timeout}
-    Capture Page Screenshot    ${text.replace(' ', '_')}.png
+    Wait Until Page Contains Element
+    ...    ${COMPLETER_BOX} .jp-Completer-item[data-value="${text}"]
+    ...    timeout=${timeout}
 
 Get Completion Item Vertical Position
     [Arguments]    ${text}
     ${position} =    Get Vertical Position    ${COMPLETER_BOX} .jp-Completer-item[data-value="${text}"]
-    [Return]    ${position}
+    RETURN    ${position}
 
 Completer Should Include Icon
     [Arguments]    ${icon}
@@ -386,6 +435,7 @@ Completer Should Not Suggest
 
 Trigger Completer
     [Arguments]    ${timeout}=35s
+    Wait For Ready State
     Press Keys    None    TAB
     Wait Until Page Contains Element    ${COMPLETER_BOX}    timeout=${timeout}
 
@@ -397,7 +447,7 @@ Completer Should Include Documentation
 
 Count Completer Hints
     ${count} =    Get Element Count    css:.jp-Completer-item
-    [Return]    ${count}
+    RETURN    ${count}
 
 Should Complete While Kernel Is Busy
     # Run the cell with sleep(20)
@@ -415,3 +465,15 @@ Should Complete While Kernel Is Busy
     Completer Should Suggest    test
     # Confirm that the kernel indicator was busy all along
     Page Should Contain Element    ${KERNEL_BUSY_INDICATOR}
+
+Wait For Our Completer To Replace Native In File Editor
+    # Normally the completion adapter taking time to initialise is not a problem
+    # but because the token-based completion fallback would break some test example
+    # if it kicked in (by instant-completing some token) so we try to avoid it
+    # TODO remove after migrating to JupyterLab 4.0 native adapters.
+    Wait Until Page Contains Element    css:.jp-FileEditor .lsp-completer-enabled
+
+Wait For Our Completer To Replace Native In Cell
+    [Arguments]    ${cell_nr}
+    # TODO remove after migrating to JupyterLab 4.0 native adapters.
+    Wait Until Page Contains Element    css:.jp-Cell:nth-child(${cell_nr}) .lsp-completer-enabled

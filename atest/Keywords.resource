@@ -1,27 +1,27 @@
 *** Settings ***
-Resource          Variables.robot
-Library           SeleniumLibrary
-Library           OperatingSystem
-Library           Process
-Library           String
-Library           Collections
-Library           ./logcheck.py
-Library           ./ports.py
-Library           ./config.py
+Library     OperatingSystem
+Library     Process
+Library     String
+Library     Collections
+Library     SeleniumLibrary
+Resource    Variables.resource
+Library     ./logcheck.py
+Library     ./ports.py
+Library     ./config.py
+Library     ./paths.py
+
 
 *** Keywords ***
 Setup Server and Browser
-    [Arguments]    ${server_extension_enabled}=${True}
     Initialize Global Variables
-    Create Notebok Server Config    ${server_extension_enabled}
+    Create Notebok Server Config
     Initialize User Settings
-    ${disable_global_config} =    Set Variable If    ${server_extension_enabled} != ${True}    '1'    ${EMPTY}
     ${server} =    Start Process    jupyter-lab
     ...    cwd=${NOTEBOOK DIR}
     ...    stdout=${LAB LOG}
     ...    stderr=STDOUT
     ...    env:HOME=${HOME}
-    ...    env:JUPYTER_NO_CONFIG=${disable_global_config}
+    ...    env:JUPYTER_NO_CONFIG=${EMPTY}
     Set Global Variable    ${SERVER}    ${server}
     Open JupyterLab
     Read Page Config
@@ -37,33 +37,41 @@ Initialize Global Variables
     Set Screenshot Directory    ${SCREENSHOTS DIR}
 
 Create Notebok Server Config
-    [Arguments]    ${server_extension_enabled}=${True}
     [Documentation]    Copies in notebook server config file and updates accordingly
-    ${conf} =    Set Variable    ${NOTEBOOK DIR}${/}${NBSERVER CONF}
+    ${conf} =    Set Variable    ${NOTEBOOK DIR}${/}${JPSERVER CONF JSON}
+    Set Environment Variable
+    ...    name=JUPYTER_CONFIG_DIR
+    ...    value=${NOTEBOOK DIR}
+    ${jupyterlab_dir} =    Get JupyterLab Path
     ${extra_node_roots} =    Create List    ${ROOT}
     ${port} =    Get Unused Port
     Set Global Variable    ${PORT}    ${port}
     Set Global Variable    ${URL}    http://localhost:${PORT}${BASE URL}
-    Copy File    ${FIXTURES}${/}${NBSERVER CONF}    ${conf}
-    Update Jupyter Config    ${conf}    LabApp
+    Copy File    ${FIXTURES}${/}${JPSERVER CONF JSON}    ${conf}
+    Copy File    ${FIXTURES}${/}${JPSERVER CONF PY}    ${NOTEBOOK DIR}${/}${JPSERVER CONF PY}
+    Copy File    ${FIXTURES}${/}overrides.json    ${jupyterlab_dir}${/}settings${/}overrides.json
+    Update Jupyter Config    ${conf}    ServerApp
     ...    base_url=${BASE URL}
     ...    port=${PORT}
     ...    token=${TOKEN}
+    Update Jupyter Config    ${conf}    LabApp
     ...    user_settings_dir=${SETTINGS DIR}
     ...    workspaces_dir=${WORKSPACES DIR}
-    # should be automatically enabled, so do not enable manually:
-    Run Keyword Unless
-    ...    ${server_extension_enabled}
-    ...    Set Server Extension State    ${conf}    enabled=${server_extension_enabled}
     Update Jupyter Config    ${conf}    LanguageServerManager
     ...    extra_node_roots=@{extra_node_roots}
 
 Set Server Extension State
-    [Arguments]    ${conf}    ${enabled}=${True}
-    ${extension_state} =    Create Dictionary    enabled=${enabled}
-    ${extensions} =    Create Dictionary    jupyter_lsp=${extension_state}
-    Update Jupyter Config    ${conf}    LabApp
-    ...    jpserver_extensions=${extensions}
+    [Arguments]    ${enabled}=${True}
+    Set Environment Variable
+    ...    name=JUPYTER_CONFIG_DIR
+    ...    value=${NOTEBOOK DIR}
+    IF    ${enabled}
+        Run Process    jupyter server extension enable jupyter_lsp
+        ...    shell=yes
+    ELSE
+        Run Process    jupyter server extension disable jupyter_lsp
+        ...    shell=yes
+    END
 
 Read Page Config
     ${script} =    Get Element Attribute    id:jupyter-config-data    innerHTML
@@ -75,6 +83,7 @@ Setup Suite For Screenshots
     [Arguments]    ${folder}
     Set Screenshot Directory    ${SCREENSHOTS DIR}${/}${folder}
     Set Tags    lab:${LAB VERSION}
+    Reset Application State
 
 Initialize User Settings
     Create File
@@ -83,10 +92,13 @@ Initialize User Settings
     Create File
     ...    ${SETTINGS DIR}${/}@jupyterlab${/}apputils-extension${/}palette.jupyterlab-settings
     ...    {"modal": false}
+    Create File
+    ...    ${SETTINGS DIR}${/}@jupyterlab${/}apputils-extension${/}notification.jupyterlab-settings
+    ...    {"fetchNews": "false"}
 
 Reset Plugin Settings
     [Arguments]    ${package}=jupyterlab-lsp    ${plugin}=plugin
-    ${LSP PLUGIN SETTINGS FILE} =    Set Variable    @krassowski${/}${package}${/}${plugin}.jupyterlab-settings
+    ${LSP PLUGIN SETTINGS FILE} =    Set Variable    @jupyter-lsp${/}${package}${/}${plugin}.jupyterlab-settings
     Create File    ${SETTINGS DIR}${/}${LSP PLUGIN SETTINGS FILE}    {}
 
 Tear Down Everything
@@ -105,27 +117,21 @@ Lab Log Should Not Contain Known Error Messages
 Wait For Splash
     Go To    ${URL}lab?reset&token=${TOKEN}
     Set Window Size    1024    768
-    Wait Until Page Contains Element    ${SPLASH}    timeout=30s
+    Wait Until Page Contains Element    ${SPLASH}    timeout=45s
     Wait Until Page Does Not Contain Element    ${SPLASH}    timeout=10s
     Execute Javascript    window.onbeforeunload \= function (){}
 
 Open JupyterLab
     Set Environment Variable    MOZ_HEADLESS    ${HEADLESS}
-    ${firefox} =    Get Firefox Binary
     ${geckodriver} =    Which    geckodriver
+    Should Not Be Equal As Strings    ${geckodriver}    None
+    ...    geckodriver not found, do you need to install firefox-geckodriver?
     ${service args} =    Create List    --log    debug
     Create WebDriver    Firefox
     ...    executable_path=${geckodriver}
-    ...    firefox_binary=${firefox}
     ...    service_log_path=${GECKODRIVER LOG}
     ...    service_args=${service args}
     Wait Until Keyword Succeeds    3x    5s    Wait For Splash
-
-Get Firefox Binary
-    [Documentation]    Get Firefox path from the environment... or hope for the best
-    ${from which} =    Which    firefox
-    ${firefox} =    Set Variable If    "%{FIREFOX_BINARY}"    %{FIREFOX_BINARY}    ${from which}
-    [Return]    ${firefox}
 
 Close JupyterLab
     Close All Browsers
@@ -142,21 +148,20 @@ Reset Application State
     Try to Close All Tabs
     Accept Default Dialog Option
     Ensure All Kernels Are Shut Down
-    Lab Command    Reset Application State
-    Wait Until Keyword Succeeds    3x    5s    Wait For Splash
+    Accept Default Dialog Option
 
 Accept Default Dialog Option
     [Documentation]    Accept a dialog, if it exists
     ${el} =    Get WebElements    ${CSS DIALOG OK}
-    Run Keyword If    ${el.__len__()}    Click Element    ${CSS DIALOG OK}
+    IF    ${el.__len__()}    Click Element    ${CSS DIALOG OK}
 
 Ensure All Kernels Are Shut Down
     Enter Command Name    Shut Down All Kernels
     ${els} =    Get WebElements    ${CMD PALETTE ITEM ACTIVE}
-    Run Keyword If    ${els.__len__()}    Click Element    ${CMD PALETTE ITEM ACTIVE}
-    ${accept} =    Set Variable    css:.jp-mod-accept.jp-mod-warn
-    Run Keyword If    ${els.__len__()}    Wait Until Page Contains Element    ${accept}
-    Run Keyword If    ${els.__len__()}    Click Element    ${accept}
+    IF    ${els.__len__()}
+        Click Element    ${CMD PALETTE ITEM ACTIVE}
+        Accept Default Dialog Option
+    END
 
 Open Command Palette
     Press Keys    id:main    ${ACCEL}+SHIFT+c
@@ -177,28 +182,28 @@ Lab Command
 Which
     [Arguments]    ${cmd}
     ${path} =    Evaluate    __import__("shutil").which("${cmd}")
-    [Return]    ${path}
+    RETURN    ${path}
 
 Click JupyterLab Menu
-    [Arguments]    ${label}
     [Documentation]    Click a top-level JupyterLab menu bar item with by ``label``,
     ...    e.g. File, Help, etc.
-    ${xpath} =    Set Variable    ${JLAB XP TOP}${JLAB XP MENU LABEL}\[text() = '${label}']
+    [Arguments]    ${label}
+    ${xpath} =    Set Variable    xpath:${JLAB XP TOP}${JLAB XP MENU LABEL}\[text() = '${label}']
     Wait Until Page Contains Element    ${xpath}
     Mouse Over    ${xpath}
     Click Element    ${xpath}
 
 Click JupyterLab Menu Item
-    [Arguments]    ${label}
     [Documentation]    Click a currently-visible JupyterLab menu item by ``label``.
+    [Arguments]    ${label}
     ${item} =    Set Variable    ${JLAB XP MENU ITEM LABEL}\[text() = '${label}']
     Wait Until Page Contains Element    ${item}
     Mouse Over    ${item}
     Click Element    ${item}
 
 Open With JupyterLab Menu
-    [Arguments]    ${menu}    @{submenus}
     [Documentation]    Click into a ``menu``, then a series of ``submenus``
+    [Arguments]    ${menu}    @{submenus}
     Click JupyterLab Menu    ${menu}
     FOR    ${submenu}    IN    @{submenus}
         Click JupyterLab Menu Item    ${submenu}
@@ -207,20 +212,29 @@ Open With JupyterLab Menu
 Ensure File Browser is Open
     ${sel} =    Set Variable    css:.lm-TabBar-tab[data-id="filebrowser"]:not(.lm-mod-current)
     ${els} =    Get WebElements    ${sel}
-    Run Keyword If    ${els.__len__()}    Click Element    ${sel}
+    IF    ${els.__len__()}    Click Element    ${sel}
 
 Ensure Sidebar Is Closed
     [Arguments]    ${side}=left
     ${els} =    Get WebElements    css:#jp-${side}-stack
-    Run Keyword If    ${els.__len__()}    Click Element    css:.jp-mod-${side} .lm-TabBar-tab.lm-mod-current
+    IF    ${els.__len__()}
+        Click Element    css:.jp-mod-${side} .lm-TabBar-tab.lm-mod-current
+    END
+
+Refresh File List
+    Ensure File Browser is Open
+    IF    [int(part) for part in "${LAB VERSION}".split(".")] >= [3, 4, 0]
+        Click Element    ${JLAB CSS REFRESH FILES}
+    ELSE
+        Click Element    ${JLAB CSS REFRESH F_OLD}
+    END
 
 Open Context Menu for File
     [Arguments]    ${file}
-    Ensure File Browser is Open
-    Click Element    ${JLAB CSS REFRESH FILES}
+    Refresh File List
     ${selector} =    Set Variable    xpath://span[@class='jp-DirListing-itemText']/span\[text() = '${file}']
     Wait Until Page Contains Element    ${selector}    timeout=10s
-    Open Context Menu    ${selector}
+    Wait Until Keyword Succeeds    10 x    0.1 s    Open Context Menu    ${selector}
 
 Rename Jupyter File
     [Arguments]    ${old}    ${new}
@@ -240,16 +254,21 @@ Input Into Dialog
 
 Open Folder
     [Arguments]    @{paths}
-    Click Element    ${JLAB CSS REFRESH FILES}
+    Refresh File List
     FOR    ${path}    IN    @{paths}
         ${sel} =    Set Variable    css:li.jp-DirListing-item\[title^='Name: ${path}']
         Wait Until Page Contains Element    ${sel}
+        Wait Until Element Is Visible    ${sel}    timeout=5s
         Double Click Element    ${sel}
     END
 
+Navigate to Root Folder
+    Ensure File Browser is Open
+    Click Element    ${ROOT FOLDER}
+
 Open ${file} in ${editor}
     ${paths} =    Set Variable    ${file.split("/")}
-    Run Keyword If    ${paths.__len__() > 1}    Open Folder    @{paths[:-1]}
+    IF    ${paths.__len__() > 1}    Open Folder    @{paths[:-1]}
     ${file} =    Set Variable    ${paths[-1]}
     Open Context Menu for File    ${file}
     Mouse Over    ${MENU OPEN WITH}
@@ -257,23 +276,29 @@ Open ${file} in ${editor}
     Mouse Over    ${editor}
     Click Element    ${editor}
 
-Clean Up After Working With File
-    [Arguments]    ${file}
-    Remove File    ${NOTEBOOK DIR}${/}${file}
+Clean Up After Working With Files
+    [Arguments]    @{files}
+    FOR    ${file}    IN    @{files}
+        Remove File    ${NOTEBOOK DIR}${/}${file}
+    END
     Reset Application State
     Lab Log Should Not Contain Known Error Messages
+
+Clean Up After Working With File
+    [Arguments]    ${file}
+    Clean Up After Working With Files    ${file}
 
 Setup Notebook
     [Arguments]    ${Language}    ${file}    ${isolated}=${True}    ${wait}=${True}
     Set Tags    language:${Language.lower()}
-    Run Keyword If    ${isolated}    Set Screenshot Directory    ${SCREENSHOTS DIR}${/}notebook${/}${TEST NAME.replace(' ', '_')}
+    IF    ${isolated}
+        Set Screenshot Directory    ${SCREENSHOTS DIR}${/}notebook${/}${TEST NAME.replace(' ', '_')}
+    END
     Copy File    examples${/}${file}    ${NOTEBOOK DIR}${/}${file}
-    Run Keyword If    ${isolated}    Try to Close All Tabs
+    IF    ${isolated}    Try to Close All Tabs
     Open ${file} in ${MENU NOTEBOOK}
     Capture Page Screenshot    00-notebook-opened.png
-    Run Keyword If
-    ...    ${wait}
-    ...    Wait Until Fully Initialized
+    IF    ${wait}    Wait Until Fully Initialized
     Capture Page Screenshot    01-notebook-initialized.png
 
 Open Diagnostics Panel
@@ -282,7 +307,7 @@ Open Diagnostics Panel
 
 Count Diagnostics In Panel
     ${count} =    Get Element Count    css:.lsp-diagnostics-listing tbody tr
-    [Return]    ${count}
+    RETURN    ${count}
 
 Close Diagnostics Panel
     Mouse Over    ${DIAGNOSTIC PANEL CLOSE}
@@ -307,7 +332,8 @@ Open Context Menu Over Cell Editor
 Place Cursor In Cell Editor At
     [Arguments]    ${cell_nr}    ${line}    ${character}
     Enter Cell Editor    ${cell_nr}    ${line}
-    Execute JavaScript    return document.querySelector('.jp-Cell:nth-child(${cell_nr}) .CodeMirror').CodeMirror.setCursor({line: ${line} - 1, ch: ${character}})
+    Execute JavaScript
+    ...    return document.querySelector('.jp-Cell:nth-child(${cell_nr}) .CodeMirror').CodeMirror.setCursor({line: ${line} - 1, ch: ${character}})
 
 Enter File Editor
     Click Element    css:.jp-FileEditor .CodeMirror
@@ -316,24 +342,30 @@ Enter File Editor
 Place Cursor In File Editor At
     [Arguments]    ${line}    ${character}
     Enter File Editor
-    Execute JavaScript    return document.querySelector('.jp-FileEditor .CodeMirror').CodeMirror.setCursor({line: ${line} - 1, ch: ${character}})
+    Execute JavaScript
+    ...    return document.querySelector('.jp-FileEditor .CodeMirror').CodeMirror.setCursor({line: ${line} - 1, ch: ${character}})
 
 Wait Until Fully Initialized
     Wait Until Element Contains    ${STATUSBAR}    Fully initialized    timeout=60s
 
+Wait For Ready State
+    Wait For Condition    return document.readyState=="complete"
+
 Open Context Menu Over
     [Arguments]    ${sel}
+    Wait For Ready State
     Wait Until Keyword Succeeds    10 x    0.1 s    Mouse Over    ${sel}
+    Wait For Ready State
     Wait Until Keyword Succeeds    10 x    0.1 s    Open Context Menu    ${sel}
 
 Context Menu Should Contain
     [Arguments]    ${label}    ${timeout}=10s
-    ${entry}    Set Variable    xpath://div[contains(@class, 'lm-Menu-itemLabel')][contains(text(), '${label}')]
+    ${entry} =    Set Variable    xpath://div[contains(@class, 'lm-Menu-itemLabel')][contains(text(), '${label}')]
     Wait Until Page Contains Element    ${entry}    timeout=${timeout}
 
 Context Menu Should Not Contain
     [Arguments]    ${label}    ${timeout}=10s
-    ${entry}    Set Variable    xpath://div[contains(@class, 'lm-Menu-itemLabel')][contains(text(), '${label}')]
+    ${entry} =    Set Variable    xpath://div[contains(@class, 'lm-Menu-itemLabel')][contains(text(), '${label}')]
     Wait Until Page Does Not Contain Element    ${entry}    timeout=${timeout}
 
 Close Context Menu
@@ -354,9 +386,13 @@ Open File
 
 Open in Advanced Settings
     [Arguments]    ${plugin id}
-    Lab Command    Advanced Settings Editor
+    IF    '${LAB VERSION}'.startswith('3.')
+        Lab Command    Advanced JSON Settings Editor
+    ELSE
+        Lab Command    Advanced Settings Editor
+    END
     ${sel} =    Set Variable    css:[data-id="${plugin id}"]
-    Wait Until Page Contains Element    ${sel}
+    Wait Until Page Contains Element    ${sel}    timeout=10s
     Click Element    ${sel}
     Wait Until Page Contains    System Defaults
 
@@ -367,14 +403,15 @@ Set Editor Content
 Get Editor Content
     [Arguments]    ${css}=${EMPTY}
     ${content} =    Execute JavaScript    return document.querySelector('${css} .CodeMirror').CodeMirror.getValue()
-    [Return]    ${content}
+    RETURN    ${content}
 
 Configure JupyterLab Plugin
     [Arguments]    ${settings json}    ${plugin id}=${LSP PLUGIN ID}
     Open in Advanced Settings    ${plugin id}
     Set Editor Content    ${settings json}    ${CSS USER SETTINGS}
     Wait Until Page Contains    No errors found
-    Click Element    css:button[title\='Save User Settings']
+    Click Element    css:button[title^\='Save User Settings']
+    Wait Until Page Contains    No errors found
     Click Element    ${JLAB XP CLOSE SETTINGS}
 
 Clean Up After Working with File and Settings
@@ -384,14 +421,16 @@ Clean Up After Working with File and Settings
 
 Jump To Definition
     [Arguments]    ${symbol}
-    ${sel} =    Set Variable If    "${symbol}".startswith(("xpath", "css"))    ${symbol}    xpath:(//span[@role="presentation"][contains(., "${symbol}")])[last()]
+    ${sel} =    Set Variable If    "${symbol}".startswith(("xpath", "css"))    ${symbol}
+    ...    xpath:(//span[@role="presentation"][contains(., "${symbol}")])[last()]
     Open Context Menu Over    ${sel}
     ${cursor} =    Measure Cursor Position
     Capture Page Screenshot    02-jump-to-definition-0.png
+    Wait Until Element Is Visible    ${MENU JUMP}    timeout=5s
     Mouse Over    ${MENU JUMP}
     Capture Page Screenshot    02-jump-to-definition-1.png
     Click Element    ${MENU JUMP}
-    [Return]    ${cursor}
+    RETURN    ${cursor}
 
 Editor Should Jump To Definition
     [Arguments]    ${symbol}
@@ -408,7 +447,7 @@ Cursor Should Jump
 Measure Cursor Position
     Wait Until Page Contains Element    ${CM CURSORS}
     ${position} =    Wait Until Keyword Succeeds    20 x    0.05s    Get Vertical Position    ${CM CURSOR}
-    [Return]    ${position}
+    RETURN    ${position}
 
 Switch To Tab
     [Arguments]    ${file}
@@ -424,3 +463,25 @@ Restart Kernel
     Lab Command    Restart Kernel…
     Wait For Dialog
     Accept Default Dialog Option
+
+Expand Menu Entry
+    [Arguments]    ${label}
+    ${entry} =    Set Variable    xpath://div[contains(@class, 'lm-Menu-itemLabel')][contains(text(), "${label}")]
+    Wait Until Page Contains Element    ${entry}    timeout=10s
+    ${menus before} =    Get Element Count    ${LAB MENU}
+    Mouse Over    ${entry}
+    ${expected menus} =    Evaluate    ${menus before} + 1
+    Wait Until Keyword Succeeds    10 x    1s    Menus Count Equal    ${expected menus}
+
+Menus Count Equal
+    [Arguments]    ${count}
+    ${menus count} =    Get Element Count    ${LAB MENU}
+    Should Be Equal    ${menus count}    ${count}
+
+Select Menu Entry
+    [Arguments]    ${label}
+    ${entry} =    Set Variable    xpath://div[contains(@class, 'lm-Menu-itemLabel')][contains(text(), '${label}')]
+    Wait Until Page Contains Element    ${entry}    timeout=10s
+    Mouse Over    ${entry}
+    Click Element    ${entry}
+    Wait Until Page Does Not Contain Element    ${entry}    timeout=10s

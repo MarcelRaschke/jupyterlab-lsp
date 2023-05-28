@@ -6,7 +6,9 @@ import json
 import pathlib
 import re
 import shutil
+import subprocess
 import sys
+from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -17,9 +19,15 @@ from typing import (
     Optional,
     Pattern,
     Text,
+    Union,
+    cast,
 )
 
-from jupyter_server.transutils import _
+try:
+    from jupyter_server.transutils import _i18n as _
+except ImportError:  # pragma: no cover
+    from jupyter_server.transutils import _
+
 from traitlets import Instance
 from traitlets import List as List_
 from traitlets import Unicode, default
@@ -38,7 +46,7 @@ if TYPE_CHECKING:  # pragma: no cover
             scope: Text,
             message: LanguageServerMessage,
             language_server: Text,
-            manager: "HasListeners",
+            manager: "LanguageServerManagerAPI",
         ) -> Awaitable[None]:
             ...
 
@@ -83,7 +91,7 @@ class MessageListener(object):
         scope: Text,
         message: LanguageServerMessage,
         language_server: Text,
-        manager: "HasListeners",
+        manager: "LanguageServerManagerAPI",
     ) -> None:
         """actually dispatch the message to the listener and capture any errors"""
         try:
@@ -130,7 +138,7 @@ class HasListeners:
         str(scope.value): [] for scope in MessageScope
     }  # type: Dict[Text, List[MessageListener]]
 
-    log = Instance("logging.Logger")
+    log: Any = Instance("logging.Logger")
 
     @classmethod
     def register_message_listener(
@@ -176,7 +184,7 @@ class HasListeners:
                     scope_val,
                     message=message,
                     language_server=language_server,
-                    manager=self,
+                    manager=cast("LanguageServerManagerAPI", self),
                 )
                 for listener in listeners
                 if listener.wants(message, language_server)
@@ -188,6 +196,8 @@ class HasListeners:
 
 class LanguageServerManagerAPI(LoggingConfigurable, HasListeners):
     """Public API that can be used for python-based spec finders and listeners"""
+
+    language_servers: KeyedLanguageServerSpecs
 
     nodejs = Unicode(help=_("path to nodejs executable")).tag(config=True)
 
@@ -226,6 +236,17 @@ class LanguageServerManagerAPI(LoggingConfigurable, HasListeners):
             shutil.which("node") or shutil.which("nodejs") or shutil.which("nodejs.exe")
         )
 
+    @lru_cache(maxsize=1)
+    def _npm_prefix(self):
+        try:
+            return (
+                subprocess.run(["npm", "prefix", "-g"], check=True, capture_output=True)
+                .stdout.decode("utf-8")
+                .strip()
+            )
+        except Exception as e:  # pragma: no cover
+            self.log.warn(f"Could not determine npm prefix: {e}")
+
     @default("node_roots")
     def _default_node_roots(self):
         """get the "usual suspects" for where `node_modules` may be found
@@ -253,8 +274,44 @@ class LanguageServerManagerAPI(LoggingConfigurable, HasListeners):
         # ... but right in %PREFIX% on nt
         roots += [pathlib.Path(sys.prefix)]
 
+        # check for custom npm prefix
+        if shutil.which("npm"):
+            prefix = self._npm_prefix()
+            if prefix:
+                roots += [  # pragma: no cover
+                    pathlib.Path(prefix) / "lib",
+                    pathlib.Path(prefix),
+                ]
+
         return roots
 
 
+SimpleSpecMaker = Callable[[LanguageServerManagerAPI], KeyedLanguageServerSpecs]
+
+# String corresponding to a fragment of a shell command
+# arguments list such as returned by `shlex.split`
+Token = Text
+
+
+class SpecBase:
+    """Base for a spec finder that returns a spec for starting a language server"""
+
+    key = ""
+    languages: List[Text] = []
+    args: List[Token] = []
+    spec: LanguageServerSpec = {}
+
+    def is_installed(self, mgr: LanguageServerManagerAPI) -> bool:  # pragma: no cover
+        """Whether the language server is installed or not.
+
+        This method may become abstract in the next major release."""
+        return True
+
+    def __call__(
+        self, mgr: LanguageServerManagerAPI
+    ) -> KeyedLanguageServerSpecs:  # pragma: no cover
+        return {}
+
+
 # Gotta be down here so it can by typed... really should have a IL
-SpecMaker = Callable[[LanguageServerManagerAPI], KeyedLanguageServerSpecs]
+SpecMaker = Union[SpecBase, SimpleSpecMaker]

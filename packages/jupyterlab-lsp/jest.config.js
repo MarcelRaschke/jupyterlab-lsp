@@ -4,10 +4,19 @@ const upstream = func('jupyterlab-lsp', __dirname);
 const reuseFromUpstream = [
   'moduleFileExtensions',
   'moduleNameMapper',
-  'setupFiles',
   'setupFilesAfterEnv',
   'testPathIgnorePatterns'
 ];
+
+const esModules = [
+  '@jupyterlab/',
+  '@retrolab/',
+  'lib0',
+  'y\\-protocols',
+  'y\\-websocket',
+  '@jupyter/ydoc',
+  'yjs'
+].join('|');
 
 let local = {
   globals: { 'ts-jest': { tsconfig: 'tsconfig.json' } },
@@ -17,11 +26,13 @@ let local = {
     '\\.(js|jsx)?$': './transform.js',
     '\\.svg$': 'jest-raw-loader'
   },
-  transformIgnorePatterns: [
-    '/node_modules/(?!(@jupyterlab/.*|@jupyterlab-classic/.*)/)'
-  ],
+  transformIgnorePatterns: [`/node_modules/(?!${esModules}).*`],
   testLocationInResults: true,
-  reporters: [...upstream['reporters'], 'jest-github-actions-reporter']
+  reporters: [...upstream['reporters'], 'jest-github-actions-reporter'],
+  setupFiles: [
+    ...upstream['setupFiles'],
+    '@jupyter-lsp/jupyterlab-lsp/lib/jest-shim.js'
+  ]
 };
 
 for (const option of reuseFromUpstream) {

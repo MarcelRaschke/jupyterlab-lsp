@@ -5,11 +5,18 @@ on:
     branches:
       - master
       - 2.x
+      - 3.x
   pull_request:
     branches:
       - master
       - 2.x
+      - 3.x
   workflow_dispatch:
+
+# TODO: might need to tweak `group`
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
 
 defaults:
   run:
@@ -21,24 +28,26 @@ env:
   PIP_DISABLE_PIP_VERSION_CHECK: 1
   PYTHONUNBUFFERED: 1
 
+  ATEST_PROCESSES: 2
   ATEST_RETRIES: 3
   JLPM_CMD: jlpm --ignore-optional --prefer-offline --frozen-lockfile
 
   # Increase this value to reset all caches
-  CACHE_EPOCH: 2
-  JULIA_LANGSERVER: 3.2.0
+  CACHE_EPOCH: 4
+  JULIA_LANGSERVER: 4.1.0
 
 jobs:
   lint:
     name: jstest/lint
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}-latest
     strategy:
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu]
         nodejs: ['>=14,<15.0.0a0']
-        lab: ['>=3.0.0,<4.0.0a0']
+        lab: ['>=3.6.0,<4.0.0a0']
+        r: ['>=4']
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - uses: cschleiden/replace-tokens@v1
         with:
@@ -48,15 +57,6 @@ jobs:
         env:
           lab: '${{ matrix.lab }}'
           nodejs: '${{ matrix.nodejs }}'
-
-      - name: Cache conda
-        uses: actions/cache@v2
-        with:
-          path: ~/conda_pkgs_dir
-          key: |
-            ${{ env.CACHE_EPOCH }}-${{ matrix.os }}-lint-${{ hashFiles('requirements/github-actions.yml', 'requirements/lint.yml') }}
-          restore-keys: |
-            ${{ env.CACHE_EPOCH }}-${{ matrix.os }}-lint-
 
       - name: Set up Python and mamba
         uses: conda-incubator/setup-miniconda@v2
@@ -73,16 +73,16 @@ jobs:
 
       - name: Cache node_modules
         id: cache-node-modules
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: '**/node_modules'
           key: |
-            ${{ env.CACHE_EPOCH }}-${{ runner.os }}-node-lint-${{ hashFiles('yarn.lock', 'requirements/github-actions.yml') }}
+            ${{ env.CACHE_EPOCH }}-${{ runner.os }}-node-build-${{ hashFiles('yarn.lock', 'requirements/github-actions.yml') }}
 
       - name: Cache yarn packages
         id: cache-yarn-packages
         if: steps.cache-node-modules.outputs.cache-hit != 'true'
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: .yarn-packages
           key: |
@@ -104,22 +104,30 @@ jobs:
       - name: Lint backend
         run: python scripts/lint.py
 
+      - name: 'Revert templated file (TODO: remove)'
+        run: git checkout requirements/github-actions.yml
+
       - name: Lint frontend
         run: jlpm lint:check
 
       - name: Check distributions
         run: python scripts/distcheck.py
 
+      - name: Rename uncached conda packages
+        shell: bash
+        run: mv "${CONDA_PKGS_DIR}" "${CONDA_PKGS_DIR}_do_not_cache"
+
   build:
     name: build
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}-latest
     strategy:
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu]
         nodejs: ['>=14,<15.0.0a0']
-        lab: ['>=3.0.0,<4.0.0a0']
+        lab: ['>=3.6.0,<4.0.0a0']
+        r: ['>=4']
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - uses: cschleiden/replace-tokens@v1
         with:
@@ -130,27 +138,18 @@ jobs:
           lab: '${{ matrix.lab }}'
           nodejs: '${{ matrix.nodejs }}'
 
-      - name: Cache conda
-        uses: actions/cache@v2
-        with:
-          path: ~/conda_pkgs_dir
-          key: |
-            ${{ env.CACHE_EPOCH }}-${{ matrix.os }}-build-${{ hashFiles('requirements/github-actions.yml') }}
-          restore-keys: |
-            ${{ env.CACHE_EPOCH }}-${{ matrix.os }}-build-
-
       - name: Set up Python and mamba
         uses: conda-incubator/setup-miniconda@v2
         with:
           miniforge-variant: Mambaforge
+          use-mamba: true
 
       - name: Install minimal build deps
-        shell: bash -l {0}
         run: mamba install -n test -c conda-forge setuptools wheel 'jupyterlab${{ matrix.lab }}' 'nodejs${{ matrix.nodejs }}'
 
       - name: Cache node_modules
         id: cache-node-modules
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: '**/node_modules'
           key: |
@@ -159,7 +158,7 @@ jobs:
       - name: Cache yarn packages
         id: cache-yarn-packages
         if: steps.cache-node-modules.outputs.cache-hit != 'true'
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: .yarn-packages
           key: |
@@ -185,6 +184,8 @@ jobs:
           python setup.py sdist bdist_wheel
           cd ../jupyterlab_lsp
           python setup.py sdist bdist_wheel
+          cd ../klingon_ls_specification
+          python setup.py sdist bdist_wheel
 
       - name: Collect distributions
         run: |
@@ -195,44 +196,39 @@ jobs:
           sha256sum * | tee SHA256SUMS
 
       - name: Publish builds
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: jupyterlab-lsp dist ${{ github.run_number }}
           path: ./dist
 
+      - name: Rename uncached conda packages
+        shell: bash
+        run: mv "${CONDA_PKGS_DIR}" "${CONDA_PKGS_DIR}_do_not_cache"
+
   acceptance:
     runs-on: ${{ matrix.os }}-latest
-    name: atest ${{ matrix.os }} py${{ matrix.python }}
+    name: atest ${{ matrix.os }} py${{ matrix.python }} r${{ matrix.r }}
     needs: [build]
     strategy:
       # TODO: maybe turn back on
       fail-fast: false
       matrix:
-        os: [ubuntu, macos, windows]
-        python: [3.6, 3.7, 3.8]
-        lab: ['>=3.0.0,<4.0.0a0']
+        os: ['ubuntu', 'macos', 'windows']
+        python: ['3.8', '3.10']
         include:
-          # if using 3.6, use an old node
-          - python: 3.6
-            # Node 10 end-of-life: April 2021
-            nodejs: '>=10,<11.0.0.a0'
-          # if using 3.7, use newer node, etc...
-          - python: 3.7
-            # Node 12 end-of-life: April 2022
-            nodejs: '>=12,<13.0.0.a0'
-          - python: 3.8
-            # Node 14 end-of-life: April 2023
-            nodejs: '>=14,<15.0.0.a0'
-          # TODO: remove when mambaforge just works on setup-miniconda
-          - os: ubuntu
-            mambaforge: Linux-x86_64.sh
-          - os: macos
-            mambaforge: MacOSX-x86_64.sh
-          - os: windows
-            mambaforge: Windows-x86_64.exe
+          - python: '3.8'
+            # Node 16 end-of-life: April 2024
+            nodejs: '>=16,<17.0.0.a0'
+            r: '>=4'
+            lab: '>=3.6.0,<4'
+          - python: '3.10'
+            # Node 16 end-of-life: April 2024
+            nodejs: '>=16,<17.0.0.a0'
+            r: '>=4'
+            lab: '>=3.6.0,<4'
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Set JupyterLab and Node versions
         uses: cschleiden/replace-tokens@v1
@@ -244,18 +240,10 @@ jobs:
           lab: '${{ matrix.lab }}'
           nodejs: '${{ matrix.nodejs }}'
 
-      - name: Cache conda
-        uses: actions/cache@v2
-        with:
-          path: ~/conda_pkgs_dir
-          key: |
-            ${{ env.CACHE_EPOCH }}-${{ matrix.os }}-${{ matrix.python }}-atest-${{ hashFiles('requirements/github-actions.yml') }}
-          restore-keys: |
-            ${{ env.CACHE_EPOCH }}-${{ matrix.os }}-${{ matrix.python }}-atest-
-
       - name: Set up Python and mamba
         uses: conda-incubator/setup-miniconda@v2
         with:
+          python-version: ${{ matrix.python }}
           environment-file: requirements/github-actions.yml
           miniforge-variant: Mambaforge
           use-mamba: true
@@ -265,7 +253,7 @@ jobs:
 
       - name: Cache node_modules
         id: cache-node-modules
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: '**/node_modules'
           key: |
@@ -274,7 +262,7 @@ jobs:
       - name: Cache yarn packages
         id: cache-yarn-packages
         if: steps.cache-node-modules.outputs.cache-hit != 'true'
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: .yarn-packages
           key: |
@@ -283,13 +271,13 @@ jobs:
             ${{ env.CACHE_EPOCH }}-yarn-${{ runner.os }}-
             ${{ env.CACHE_EPOCH }}-yarn-
 
-      - uses: actions/cache@v2
+      - uses: actions/cache@v3
         with:
           path: ~/.julia/artifacts
           key: |
             ${{ env.CACHE_EPOCH }}-julia-test-${{ runner.os }}-${{ env.JULIA_LANGSERVER }}
 
-      - uses: actions/download-artifact@v2
+      - uses: actions/download-artifact@v3
         with:
           name: jupyterlab-lsp dist ${{ github.run_number }}
           path: ./dist
@@ -297,8 +285,13 @@ jobs:
       - name: Install python packages
         run: python -m pip install --find-links=dist --no-index --ignore-installed --no-deps jupyter_lsp jupyterlab_lsp
 
+      - name: Install Klingon file type extension and server specification (for testing languages without language servers)
+        run: python -m pip install --find-links=dist --no-index --ignore-installed --no-deps klingon_ls_specification
+
       - name: Pip check
-        run: python -m pip check
+        run: |
+          python -m pip check
+          python -m pip list | grep -ie klingon-ls-specification
 
       - name: List server extensions
         run: |
@@ -311,7 +304,10 @@ jobs:
           jupyter serverextension list 2>&1 | grep -ie "jupyter_lsp.*enabled" -
 
       - name: List frontend extensions
-        run: jupyter labextension list
+        run: |
+          jupyter labextension list
+          jupyter labextension list 2>&1 | grep -ie "jupyterlab-lsp.*enabled" -
+          jupyter labextension list 2>&1 | grep -ie "jupyterlab-lsp-klingon-integration.*enabled" -
 
       - name: install node-based language servers
         if: steps.cache-node-modules.outputs.cache-hit != 'true'
@@ -329,12 +325,22 @@ jobs:
       - name: Run browser tests
         run: python scripts/atest.py --exclude expect:fail
 
+      - name: Find and remove empty files
+        # https://github.com/actions/upload-artifact/issues/150
+        run: find ./atest/output -empty -delete
+        if: always()
+        shell: bash
+
       - name: Publish browser test output
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: ${{ job.status }} Robot ${{ matrix.os }} Python ${{ matrix.python }} ${{ github.run_number }}
           path: ./atest/output
         if: always()
+
+      - name: Rename uncached conda packages
+        shell: bash
+        run: mv "${CONDA_PKGS_DIR}" "${CONDA_PKGS_DIR}_do_not_cache"
 
   smoke:
     name: smoke ${{ matrix.os }} py${{ matrix.python }}
@@ -342,39 +348,46 @@ jobs:
     needs: [build, lint]
     strategy:
       fail-fast: false
+      max-parallel: 3
       matrix:
-        os: [ubuntu, macos, windows]
-        python: ['3.6', '3.9', 'pypy3']
+        os: ['ubuntu', 'macos', 'windows']
+        python: ['3.8', '3.9', '3.10', 'pypy-3.8']
         exclude:
           - os: windows
-            python: pypy3
+            python: pypy-3.7
         include:
-          - python: '3.6'
-            dist: 'jupyter*lsp*.tar.gz'
-          - python: 'pypy3'
-            dist: 'jupyter*lsp*.tar.gz'
-          - python: '3.9'
+          - python: '3.8'
             dist: 'jupyter*lsp*.whl'
-          - os: windows
+            lab: '>=3.6,<3.7'
+          - python: '3.9'
+            dist: 'jupyter*lsp*.tar.gz'
+            lab: '>=3.6,<4'
+          - python: '3.10'
+            dist: 'jupyter*lsp*.whl'
+            lab: '>=3.6,<4'
+          - python: 'pypy-3.8'
+            dist: 'jupyter*lsp*.tar.gz'
+            lab: '>=3.6,<4'
+          - os: 'windows'
             py_cmd: python
-          - os: macos
+          - os: 'macos'
             py_cmd: python3
-          - os: ubuntu
+          - os: 'ubuntu'
             py_cmd: python
     steps:
       - name: Install Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python }}
           architecture: 'x64'
-      - uses: actions/download-artifact@v2
+      - uses: actions/download-artifact@v3
         with:
           name: jupyterlab-lsp dist ${{ github.run_number }}
           path: ./dist
       - name: Install the prerequisites
         run: ${{ matrix.py_cmd }} -m pip install pip wheel
       - name: Install the package
-        run: cd dist && ${{ matrix.py_cmd }} -m pip install -vv ${{ matrix.dist }}
+        run: cd dist && ${{ matrix.py_cmd }} -m pip install -vv ${{ matrix.dist }} 'jupyterlab${{ matrix.lab }}'
       - name: Validate environment
         run: |
           set -eux
@@ -383,45 +396,50 @@ jobs:
       - name: Validate the install
         run: |
           set -eux
-          jupyter labextension list
-          jupyter server extension list
-          jupyter labextension list 2>&1 | grep -ie "jupyterlab-lsp.*enabled.*ok" -
-          jupyter server extension list 2>&1 | grep -ie "jupyter_lsp.*enabled" -
+          ${{ matrix.py_cmd }} -m jupyter labextension list
+          ${{ matrix.py_cmd }} -m jupyter server extension list
+          ${{ matrix.py_cmd }} -m jupyter labextension list 2>&1 | grep -ie "jupyterlab-lsp.*enabled.*ok" -
+          ${{ matrix.py_cmd }} -m jupyter server extension list 2>&1 | grep -ie "jupyter_lsp.*enabled" -
 
   source:
-    name: smoke source install ${{ matrix.os }}
+    name: smoke source install ${{ matrix.os }} py${{ matrix.python }} lab${{ matrix.lab }}
     runs-on: ${{ matrix.os }}-latest
     needs: [build]
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu]
-        python: ['3.6']
+        python: ['3.8', '3.10']
         nodejs: ['14']
-        lab: ['>=3.0.0,<4.0.0a0']
+        include:
+          - python: '3.8'
+            lab: '>=3.6,<3.7'
+          - python: '3.10'
+            lab: '>=3.6,<4'
     steps:
       - name: Install Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python }}
           architecture: 'x64'
       - name: Setup Node
-        uses: actions/setup-node@v2
+        uses: actions/setup-node@v3
         with:
-          node-version: ${{matrix.nodejs}}
-      - uses: actions/download-artifact@v2
+          node-version: ${{ matrix.nodejs }}
+      - uses: actions/download-artifact@v3
         with:
           name: jupyterlab-lsp dist ${{ github.run_number }}
           path: ./dist
       - name: Install the prerequisites
-        run: python -m pip install pip wheel
+        run: python -m pip install --upgrade pip wheel setuptools
       - name: Install JupyterLab
-        shell: bash -l {0}
         run: python -m pip install 'jupyterlab${{ matrix.lab }}'
+      - name: Install Notebook (to test serverextension)
+        run: python -m pip install 'notebook'
       - name: Install the server package
         run: cd dist && python -m pip install -vv jupyter_lsp*.whl
       - name: install the source extension
-        run: cd dist && jupyter labextension install krassowski-jupyterlab-lsp-*.tgz --log-level DEBUG
+        run: cd dist && jupyter labextension install jupyter-lsp-jupyterlab-lsp-*.tgz --log-level DEBUG
       - name: Validate the install
         run: |
           set -eux

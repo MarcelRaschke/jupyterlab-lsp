@@ -8,6 +8,8 @@ dependencies:
   - black
   - isort
   - mypy
-  - robotframework-lint >=1.1
-  - robotframework >=4
+  - pip
   - pytest-tornasync
+  - robotframework-robocop
+  - robotframework-tidy
+  - types-six

@@ -100,7 +100,7 @@ export interface IVirtualEditor<T extends IEditor> {
    */
   window_coords_to_root_position(
     coordinates: IWindowCoordinates
-  ): IRootPosition;
+  ): IRootPosition | null;
 
   /**
    * Get the token at given root source position.
@@ -152,7 +152,7 @@ export class VirtualEditorManager implements ILSPVirtualEditorManager {
 
   findBestImplementation(
     editors: CodeEditor.IEditor[]
-  ): IVirtualEditorType<any> {
+  ): IVirtualEditorType<any> | null {
     // for now, we check if all editors are of the same type,
     // but it could be good enough if majority of the editors
     // had the requested type
@@ -169,12 +169,13 @@ export class VirtualEditorManager implements ILSPVirtualEditorManager {
   }
 }
 
-export const VIRTUAL_EDITOR_MANAGER: JupyterFrontEndPlugin<ILSPVirtualEditorManager> = {
-  id: PLUGIN_ID + ':ILSPVirtualEditorManager',
-  requires: [],
-  activate: app => {
-    return new VirtualEditorManager();
-  },
-  provides: ILSPVirtualEditorManager,
-  autoStart: true
-};
+export const VIRTUAL_EDITOR_MANAGER: JupyterFrontEndPlugin<ILSPVirtualEditorManager> =
+  {
+    id: PLUGIN_ID + ':ILSPVirtualEditorManager',
+    requires: [],
+    activate: app => {
+      return new VirtualEditorManager();
+    },
+    provides: ILSPVirtualEditorManager,
+    autoStart: true
+  };

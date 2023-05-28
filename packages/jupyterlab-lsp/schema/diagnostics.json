@@ -29,6 +29,23 @@
       },
       "default": [],
       "description": "Regular expressions matching messages of diagnostics which should not be shown in the panel nor highlighted in the editor."
+    },
+    "ignoreSeverities": {
+      "title": "Diagnostic severity levels to ignore",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["Error", "Warning", "Information", "Hint"]
+      },
+      "default": [],
+      "uniqueItems": true,
+      "description": "Severities of diagnostics which should not be shown in the panel nor highlighted in the editor."
+    },
+    "disable": {
+      "title": "Disable",
+      "type": "boolean",
+      "default": false,
+      "description": "Disable this feature. Requires reloading JupyterLab to apply changes."
     }
   },
   "jupyter.lab.shortcuts": []

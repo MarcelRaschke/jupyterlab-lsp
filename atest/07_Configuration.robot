@@ -1,8 +1,12 @@
 *** Settings ***
-Documentation     Configuration of language servers
-Suite Setup       Setup Suite For Screenshots    config
-Force Tags        feature:config
-Resource          ./Keywords.robot
+Documentation       Configuration of language servers
+
+Resource            ./Keywords.resource
+
+Suite Setup         Setup Suite For Screenshots    config
+
+Test Tags           feature:config
+
 
 *** Test Cases ***
 Python
@@ -12,16 +16,37 @@ Python
     ...    undefined name 'foo' (pyflakes)
     ...    undefined name 'foo' (flake8)
 
+Python (server-side via overrides.json)
+    [Documentation]    same as "Python" but changing the defaults in server specification via `overrides.json`
+    Settings Should Change Editor Diagnostics    Python    style.py    pylsp-with-override-json
+    ...    settings=100
+    ...    before=undefined name 'foo' (pyflakes)
+    ...    after=undefined name 'foo' (flake8)
+    ...    setting_key=priority
+    ...    needs reload=${True}
+
+Python (server-side via spec)
+    [Documentation]    same as "Python" but changing the defaults in server specification via `workspace_configuration`
+    Settings Should Change Editor Diagnostics    Python    style.py    pylsp-with-override-spec
+    ...    settings=100
+    ...    before=undefined name 'foo' (pyflakes)
+    ...    after=undefined name 'foo' (flake8)
+    ...    setting_key=priority
+    ...    needs reload=${True}
+
 YAML
     [Documentation]    Composer YAML files don't allow a "greetings" key
     Settings Should Change Editor Diagnostics    YAML    example.yaml    yaml-language-server
     ...    {"yaml.schemas": {"http://json.schemastore.org/composer": "*"}}
-    ...    duplicate key
+    ...    Map keys must be unique
     ...    Property greetings is not allowed.
 
 Markdown
     [Documentation]    different englishes spell colou?r differently
-    Settings Should Change Editor Diagnostics    Markdown    example.md    unified-language-server
+    Settings Should Change Editor Diagnostics
+    ...    Markdown
+    ...    example.md
+    ...    unified-language-server
     ...    {"unified-language-server":{"remark-parse":{"plugins":[["#remark-retext","#parse-latin"],["#retext-spell","#dictionary-en"]]}}}
     ...    `Color` is misspelt
     ...    `Colour` is misspelt
@@ -31,15 +56,16 @@ LaTeX
     [Tags]    language:latex
     ${needs reload} =    Set Variable    "${OS}" == "Windows"
     Settings Should Change Editor Diagnostics    LaTeX    example.tex    texlab
-    ...    {"latex.lint.onChange": true}
+    ...    {"chktex.onOpenAndSave": true, "chktex.onEdit": true}
     ...    ${EMPTY}
-    ...    Command terminated with space. (chktex)
+    ...    Command terminated with space.
     ...    Save File
     ...    ${needs reload}
 
+
 *** Keywords ***
 Settings Should Change Editor Diagnostics
-    [Arguments]    ${language}    ${file}    ${server}    ${settings}    ${before}    ${after}    ${save command}=${EMPTY}    ${needs reload}=${False}
+    [Arguments]    ${language}    ${file}    ${server}    ${settings}    ${before}    ${after}    ${save command}=${EMPTY}    ${needs reload}=${False}    ${setting_key}=serverSettings
     ${before diagnostic} =    Set Variable    ${CSS DIAGNOSTIC}\[title*="${before}"]
     ${after diagnostic} =    Set Variable    ${CSS DIAGNOSTIC}\[title*="${after}"]
     ${tab} =    Set Variable    ${JLAB XP DOCK TAB}\[contains(., '${file}')]
@@ -52,20 +78,27 @@ Settings Should Change Editor Diagnostics
     Open Diagnostics Panel
     Drag and Drop By Offset    ${JLAB XP DOCK TAB}\[contains(., 'Diagnostics Panel')]    600    -200
     Click Element    ${JLAB XP DOCK TAB}\[contains(., 'Launcher')]/${close icon}
-    Run Keyword If    "${before}"    Wait Until Page Contains Element    ${before diagnostic}    timeout=30s
+    IF    "${before}"
+        Wait Until Page Contains Element    ${before diagnostic}    timeout=30s
+    END
     Page Should Not Contain    ${after diagnostic}
     Capture Page Screenshot    01-default-diagnostics-and-settings.png
-    Set Editor Content    {"language_servers": {"${server}": {"serverSettings": ${settings}}}}    ${CSS USER SETTINGS}
+    Set Editor Content    {"language_servers": {"${server}": {"${setting_key}": ${settings}}}}    ${CSS USER SETTINGS}
     Wait Until Page Contains    No errors found
     Capture Page Screenshot    02-default-diagnostics-and-unsaved-settings.png
-    Click Element    css:button[title\='Save User Settings']
+    Click Element    css:button[title^\='Save User Settings']
     Click Element    ${JLAB XP CLOSE SETTINGS}
     Drag and Drop By Offset    ${tab}    0    100
     Lab Command    ${save command}
     Ensure Sidebar Is Closed
     Capture Page Screenshot    03-settings-changed.png
-    Run Keyword If    ${needs reload}    Reload After Configuration    ${language}    ${file}
-    Wait Until Page Contains Element    ${after diagnostic}    timeout=30s
+    IF    ${needs reload}
+        Reload After Configuration    ${language}    ${file}
+        # allow longer after reload
+        Wait Until Page Contains Element    ${after diagnostic}    timeout=60s
+    ELSE
+        Wait Until Page Contains Element    ${after diagnostic}    timeout=30s
+    END
     Capture Page Screenshot    04-configured-diagnostic-found.png
     [Teardown]    Clean Up After Working with File and Settings    ${file}
 

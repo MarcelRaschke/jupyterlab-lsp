@@ -1,13 +1,26 @@
 """ A configurable frontend for stdio-based Language Servers
 """
+import asyncio
 import os
+import sys
 import traceback
-from typing import Dict, Text, Tuple
+from typing import Dict, Text, Tuple, cast
 
-import entrypoints
+# See compatibility note on `group` keyword in
+# https://docs.python.org/3/library/importlib.metadata.html#entry-points
+if sys.version_info < (3, 10):  # pragma: no cover
+    from importlib_metadata import entry_points
+else:  # pragma: no cover
+    from importlib.metadata import entry_points
+
 from jupyter_core.paths import jupyter_config_path
 from jupyter_server.services.config import ConfigManager
-from jupyter_server.transutils import _
+
+try:
+    from jupyter_server.transutils import _i18n as _
+except ImportError:  # pragma: no cover
+    from jupyter_server.transutils import _
+
 from traitlets import Bool
 from traitlets import Dict as Dict_
 from traitlets import Instance
@@ -28,6 +41,7 @@ from .types import (
     KeyedLanguageServerSpecs,
     LanguageServerManagerAPI,
     MessageScope,
+    SpecBase,
     SpecMaker,
 )
 
@@ -35,12 +49,12 @@ from .types import (
 class LanguageServerManager(LanguageServerManagerAPI):
     """Manage language servers"""
 
-    conf_d_language_servers = Schema(
+    conf_d_language_servers = Schema(  # type:ignore[assignment]
         validator=LANGUAGE_SERVER_SPEC_MAP,
         help=_("extra language server specs, keyed by implementation, from conf.d"),
     )  # type: KeyedLanguageServerSpecs
 
-    language_servers = Schema(
+    language_servers = Schema(  # type:ignore[assignment]
         validator=LANGUAGE_SERVER_SPEC_MAP,
         help=_("a dict of language server specs, keyed by implementation"),
     ).tag(
@@ -53,7 +67,7 @@ class LanguageServerManager(LanguageServerManagerAPI):
         config=True
     )  # type: bool
 
-    sessions = Dict_(
+    sessions = Dict_(  # type:ignore[assignment]
         trait=Instance(LanguageServerSession),
         default_value={},
         help="sessions keyed by language server name",
@@ -67,6 +81,10 @@ class LanguageServerManager(LanguageServerManagerAPI):
         '.virtual_documents'.
         """
     ).tag(config=True)
+
+    _ready = Bool(
+        help="""Whether the manager has been initialized""", default_value=False
+    )
 
     all_listeners = List_(trait=LoadableCallable).tag(config=True)
     server_listeners = List_(trait=LoadableCallable).tag(config=True)
@@ -97,31 +115,46 @@ class LanguageServerManager(LanguageServerManagerAPI):
 
     def __init__(self, **kwargs):
         """Before starting, perform all necessary configuration"""
+        self.all_language_servers: KeyedLanguageServerSpecs = {}
+        self._language_servers_from_config = {}
         super().__init__(**kwargs)
 
     def initialize(self, *args, **kwargs):
         self.init_language_servers()
         self.init_listeners()
         self.init_sessions()
+        self._ready = True
+
+    async def ready(self):
+        while not self._ready:  # pragma: no cover
+            await asyncio.sleep(0.1)
+        return True
 
     def init_language_servers(self) -> None:
         """determine the final language server configuration."""
-        language_servers = {}  # type: KeyedLanguageServerSpecs
-
         # copy the language servers before anybody monkeys with them
-        language_servers_from_config = dict(self.language_servers)
+        self._language_servers_from_config = dict(self.language_servers)
+        self.language_servers = self._collect_language_servers(only_installed=True)
+        self.all_language_servers = self._collect_language_servers(only_installed=False)
+
+    def _collect_language_servers(
+        self, only_installed: bool
+    ) -> KeyedLanguageServerSpecs:
+        language_servers: KeyedLanguageServerSpecs = {}
+
+        language_servers_from_config = dict(self._language_servers_from_config)
         language_servers_from_config.update(self.conf_d_language_servers)
 
         if self.autodetect:
-            language_servers.update(self._autodetect_language_servers())
+            language_servers.update(
+                self._autodetect_language_servers(only_installed=only_installed)
+            )
 
         # restore config
         language_servers.update(language_servers_from_config)
 
         # coalesce the servers, allowing a user to opt-out by specifying `[]`
-        self.language_servers = {
-            key: spec for key, spec in language_servers.items() if spec.get("argv")
-        }
+        return {key: spec for key, spec in language_servers.items() if spec.get("argv")}
 
     def init_sessions(self):
         """create, but do not initialize all sessions"""
@@ -143,13 +176,11 @@ class LanguageServerManager(LanguageServerManagerAPI):
         for scope, trt_ep in scopes.items():
             listeners, entry_point = trt_ep
 
-            for ep_name, ept in entrypoints.get_group_named(
-                entry_point
-            ).items():  # pragma: no cover
+            for ept in entry_points(group=entry_point):  # pragma: no cover
                 try:
                     listeners.append(ept.load())
                 except Exception as err:
-                    self.log.warning("Failed to load entry point %s: %s", ep_name, err)
+                    self.log.warning("Failed to load entry point %s: %s", ept.name, err)
 
             for listener in listeners:
                 self.__class__.register_message_listener(scope=scope.value)(listener)
@@ -210,32 +241,40 @@ class LanguageServerManager(LanguageServerManagerAPI):
 
         session.handlers = [h for h in session.handlers if h != handler]
 
-    def _autodetect_language_servers(self):
-        entry_points = []
+    def _autodetect_language_servers(self, only_installed: bool):
+        _entry_points = None
 
         try:
-            entry_points = entrypoints.get_group_named(EP_SPEC_V1)
+            _entry_points = entry_points(group=EP_SPEC_V1)
         except Exception:  # pragma: no cover
             self.log.exception("Failed to load entry_points")
 
-        for ep_name, ep in entry_points.items():
+        skipped_servers = []
+
+        for ep in _entry_points or []:
             try:
                 spec_finder = ep.load()  # type: SpecMaker
             except Exception as err:  # pragma: no cover
-                self.log.warn(
+                self.log.warning(
                     _("Failed to load language server spec finder `{}`: \n{}").format(
-                        ep_name, err
+                        ep.name, err
                     )
                 )
                 continue
 
             try:
-                specs = spec_finder(self)
+                if only_installed:
+                    if hasattr(spec_finder, "is_installed"):
+                        spec_finder_from_base = cast(SpecBase, spec_finder)
+                        if not spec_finder_from_base.is_installed(self):
+                            skipped_servers.append(ep.name)
+                            continue
+                specs = spec_finder(self) or {}
             except Exception as err:  # pragma: no cover
                 self.log.warning(
                     _(
                         "Failed to fetch commands from language server spec finder"
-                        "`{}`:\n{}"
+                        " `{}`:\n{}"
                     ).format(ep.name, err)
                 )
                 traceback.print_exc()
@@ -248,13 +287,20 @@ class LanguageServerManager(LanguageServerManagerAPI):
                 self.log.warning(
                     _(
                         "Failed to validate commands from language server spec finder"
-                        "`{}`:\n{}"
+                        " `{}`:\n{}"
                     ).format(ep.name, errors)
                 )
                 continue
 
             for key, spec in specs.items():
                 yield key, spec
+
+        if skipped_servers:
+            self.log.info(
+                _("Skipped non-installed server(s): {}").format(
+                    ", ".join(skipped_servers)
+                )
+            )
 
 
 # the listener decorator

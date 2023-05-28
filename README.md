@@ -1,12 +1,13 @@
 # Language Server Protocol integration for Jupyter(Lab)
 
-[![tests](https://github.com/krassowski/jupyterlab-lsp/workflows/CI/badge.svg)](https://github.com/krassowski/jupyterlab-lsp/actions?query=workflow%3ACI+branch%3Amaster)
+[![tests](https://github.com/jupyter-lsp/jupyterlab-lsp/workflows/CI/badge.svg)](https://github.com/jupyter-lsp/jupyterlab-lsp/actions?query=workflow%3ACI+branch%3Amaster)
 [![Documentation Status](https://readthedocs.org/projects/jupyterlab-lsp/badge/?version=latest)](https://jupyterlab-lsp.readthedocs.io/en/latest/?badge=latest)
-[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/krassowski/jupyterlab-lsp/master?urlpath=lab%2Ftree%2Fexamples%2FPython.ipynb)
+[![Python Demo](https://img.shields.io/badge/demo-Python-blue)](https://mybinder.org/v2/gh/jupyter-lsp/demo-python/main?urlpath=lab)
+[![R Demo](https://img.shields.io/badge/demo-R-blue)](https://mybinder.org/v2/gh/jupyter-lsp/demo-r/main?urlpath=lab)
+[![Julia Demo](https://img.shields.io/badge/demo-Julia-blue)](https://mybinder.org/v2/gh/jupyter-lsp/demo-julia/main?urlpath=lab)
+[![Binder](https://img.shields.io/badge/launch-dev_version-blue)](https://mybinder.org/v2/gh/jupyter-lsp/jupyterlab-lsp/master?urlpath=lab%2Ftree%2Fexamples%2FPython.ipynb)
 
-> _This project is still maturing, but you are welcome to check it out, leave feedback and/or a PR_
-
-Quick Links: **[Installation](#installation) | [Configuring](./docs/Configuring.ipynb) | [Changelog](./CHANGELOG.md) | [Roadmap](./docs/Roadmap.ipynb) | [Contributing](./CONTRIBUTING.md) | [Extending](./docs/Extending.ipynb)**
+**[Installation](#installation) | [Configuring](./docs/Configuring.ipynb) | [Changelog](./CHANGELOG.md) | [Roadmap](./docs/Roadmap.ipynb) | [Contributing](./CONTRIBUTING.md) | [Extending](./docs/Extending.ipynb)**
 
 ## Features
 
@@ -18,20 +19,20 @@ Hover over any piece of code; if an underline appears, you can press <kbd>Ctrl</
 to get a tooltip with function/class signature, module documentation or any other
 piece of information that the language server provides
 
-![hover](https://raw.githubusercontent.com/krassowski/jupyterlab-lsp/master/examples/screenshots/hover.png)
+![hover](https://raw.githubusercontent.com/jupyter-lsp/jupyterlab-lsp/master/examples/screenshots/hover.png)
 
 ### Diagnostics
 
 Critical errors have red underline, warnings are orange, etc. Hover
 over the underlined code to see a more detailed message
 
-![inspections](https://raw.githubusercontent.com/krassowski/jupyterlab-lsp/master/examples/screenshots/inspections.png)
+![inspections](https://raw.githubusercontent.com/jupyter-lsp/jupyterlab-lsp/master/examples/screenshots/inspections.png)
 
-### Jump to Definition
+### Jump to Definition and References
 
-Use the context menu entry, or <kbd>Alt</kbd> + :computer_mouse: to jump to definitions (you can change it to <kbd>Ctrl</kbd>/<kbd>⌘</kbd> in settings); use <kbd>Alt</kbd> + <kbd>o</kbd> to jump back
+Use the context menu entry, or <kbd>Alt</kbd> + :computer_mouse: to jump to definitions/references (you can change it to <kbd>Ctrl</kbd>/<kbd>⌘</kbd> in settings); use <kbd>Alt</kbd> + <kbd>o</kbd> to jump back.
 
-![jump](https://raw.githubusercontent.com/krassowski/jupyterlab-lsp/master/examples/screenshots/jump_to_definition.png)
+![jump](https://raw.githubusercontent.com/jupyter-lsp/jupyterlab-lsp/master/examples/screenshots/jump_to_definition.png)
 
 ### Highlight References
 
@@ -43,19 +44,19 @@ Place your cursor on a variable, function, etc and all the usages will be highli
   completion.
 - You can choose to receive the completion suggestions as you type by enabling `continuousHinting` setting.
 
-![invoke](https://raw.githubusercontent.com/krassowski/jupyterlab-lsp/master/examples/screenshots/autocompletion.gif)
+![invoke](https://raw.githubusercontent.com/jupyter-lsp/jupyterlab-lsp/master/examples/screenshots/autocompletion.gif)
 
 ### Automatic Signature Suggestions
 
 Function signatures will automatically be displayed
 
-![signature](https://raw.githubusercontent.com/krassowski/jupyterlab-lsp/master/examples/screenshots/signature.png)
+![signature](https://raw.githubusercontent.com/jupyter-lsp/jupyterlab-lsp/master/examples/screenshots/signature.png)
 
 ### Kernel-less Autocompletion
 
 Advanced static-analysis autocompletion without a running kernel
 
-![autocompletion](https://raw.githubusercontent.com/krassowski/jupyterlab-lsp/master/examples/screenshots/completions-Julia-Python-R.gif)
+![autocompletion](https://raw.githubusercontent.com/jupyter-lsp/jupyterlab-lsp/master/examples/screenshots/completions-Julia-Python-R.gif)
 
 #### The runtime kernel suggestions are still there
 
@@ -75,7 +76,7 @@ setting; Or add both if you like to code in hardcore mode and get no completions
 Rename variables, functions and more, in both: notebooks and the file editor.
 Use the context menu option or the <kbd>F2</kbd> shortcut to invoke.
 
-![rename](https://raw.githubusercontent.com/krassowski/jupyterlab-lsp/master/examples/screenshots/rename.png)
+![rename](https://raw.githubusercontent.com/jupyter-lsp/jupyterlab-lsp/master/examples/screenshots/rename.png)
 
 ### Diagnostics panel
 
@@ -83,14 +84,14 @@ Sort and jump between the diagnostics using the diagnostics panel.
 Open it searching for "Show diagnostics panel" in JupyterLab commands palette or from the context menu.
 Use context menu on rows in the panel to filter out diagnostics or copy their message.
 
-![panel](https://raw.githubusercontent.com/krassowski/jupyterlab-lsp/master/examples/screenshots/panel.png)
+![panel](https://raw.githubusercontent.com/jupyter-lsp/jupyterlab-lsp/master/examples/screenshots/panel.png)
 
 ## Prerequisites
 
 You will need to have both of the following installed:
 
-- JupyterLab >=3.0.0,<4.0.0a0
-- Python 3.6+
+- JupyterLab >=3.6.0,<4.0.0a0
+- Python 3.8+
 
 In addition, if you wish to use javascript, html, markdown or any other NodeJS-based language server you will need to have appropriate NodeJS version installed.
 
@@ -127,7 +128,6 @@ Use of a python `virtualenv` or a conda env is also recommended.
    R ([languageserver](https://github.com/REditorSupport/languageserver)) servers:
 
    ```bash
-   # note: you may want to use our fork of python-language-server instead (see below)
    pip install 'python-lsp-server[all]'
    R -e 'install.packages("languageserver")'
    ```
@@ -145,19 +145,13 @@ Use of a python `virtualenv` or a conda env is also recommended.
    [Microsoft list](https://microsoft.github.io/language-server-protocol/implementors/servers/)
    should work after [some additional configuration](./CONTRIBUTING.md#specs).
 
-   Note 1: it is worth visiting the repository of each server you install as
+   Note: it is worth visiting the repository of each server you install as
    many provide additional configuration options.
 
-   Note 2: we are developing an improved (faster autocompletion, added features)
-   version of the `python-language-server`. It is experimental and should
-   not be used in production yet, but will likely benefit individual users
-   You can check it out with:
+1. Restart JupyterLab
 
-   ```bash
-   pip install git+https://github.com/krassowski/python-language-server.git@main
-   ```
-
-   Please report any regressions [here](https://github.com/krassowski/jupyterlab-lsp/issues/272).
+   If JupyterLab is running when you installed the extension, a restart is required
+   for the server extension and any language servers to be recognized by JupyterLab.
 
 1. (Optional, IPython users only) to improve the performance of autocompletion,
    disable Jedi in IPython (the LSP servers for Python use Jedi too).
@@ -169,30 +163,35 @@ Use of a python `virtualenv` or a conda env is also recommended.
 
    or permanently by setting `c.Completer.use_jedi = False` in your
    [`ipython_config.py` file](https://ipython.readthedocs.io/en/stable/config/intro.html?highlight=ipython_config.py#systemwide-configuration).
-   You will also benefit from using experimental version of python-language-server
-   as described in the Note 2 (above).
 
-1. (Optional, Linux/OSX-only) to enable opening files outside of the root
-   directory (the place where you start JupyterLab), create `.lsp_symlink` and
-   symlink your `/home`, or any other location which includes the files that you
-   wish to make possible to open in there:
+1. (Optional, Linux/OSX-only) As a security measure by default Jupyter server only allows
+   access to files under the Jupyter root directory (the place where you launch the Jupyter server).
+   Thus, in order to allow `jupyterlab-lsp` to navigate to external files such as packages
+   installed system-wide or to libraries inside a virtual environment (`conda`,
+   `pip`, ...) this access control mechanism needs to be circumvented: inside your Jupyter
+   root directory create a symlink named _.lsp_symlink_ pointing to your system root `/`.
 
-   ```bash
-   mkdir .lsp_symlink
-   cd .lsp_symlink
-   ln -s /home home
+   ```
+   ln -s / .lsp_symlink
    ```
 
-   If your user does not have sufficient permissions to traverse the entire path,
-   you will not be able to open the file. A more detailed guide on symlinking
-   (written for a related jupyterlab-go-to-definition extension) is available
-   [here](https://github.com/krassowski/jupyterlab-go-to-definition/blob/master/README.md#which-directories-to-symlink).
+   As this symlink is a hidden file the Jupyter server must be instructed to
+   serve hidden files. Either use the appropriate command line flag:
+
+   ```
+   jupyter lab --ContentsManager.allow_hidden=True
+   ```
+
+   or, alternatively, set the corresponding setting inside your `jupyter_server_config.py`.
+
+   Help in implementing a custom [`ContentsManager`](https://github.com/jupyter-lsp/jupyterlab-lsp/issues/850)
+   which will enable navigating to external files without the symlink is welcome.
 
 ### Configuring the servers
 
 Server configurations can be edited using the Advanced Settings editor in JupyterLab (_Settings > Advanced Settings Editor_). For settings specific to each server, please see the [table of language servers][language-servers]. Example settings might include:
 
-> Note: for the new (currently recommended) python-lsp-server replace `pyls` occurrences with `pyslp`
+> Note: for the new (currently recommended) python-lsp-server replace `pyls` occurrences with `pylsp`
 
 ```json
 {

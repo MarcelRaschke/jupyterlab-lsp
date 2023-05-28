@@ -3,9 +3,15 @@
 /** General public tokens, including lumino Tokens and namespaces */
 export * from './tokens';
 
+/** Generated JSON Schema types for server responses and settings */
+export * as SCHEMA from './_schema';
+
 /** Component- and feature-specific APIs */
 export * from './api';
 
+import { COMPLETION_THEME_MANAGER } from '@jupyter-lsp/completion-theme';
+import { plugin as THEME_MATERIAL } from '@jupyter-lsp/theme-material';
+import { plugin as THEME_VSCODE } from '@jupyter-lsp/theme-vscode';
 import {
   JupyterFrontEnd,
   JupyterFrontEndPlugin
@@ -13,16 +19,16 @@ import {
 import { ICommandPalette } from '@jupyterlab/apputils';
 import { IDocumentManager } from '@jupyterlab/docmanager';
 import { IDocumentWidget } from '@jupyterlab/docregistry';
+import { ILoggerRegistry } from '@jupyterlab/logconsole';
 import { ISettingRegistry } from '@jupyterlab/settingregistry';
 import { IStatusBar } from '@jupyterlab/statusbar';
 import { ITranslator, nullTranslator } from '@jupyterlab/translation';
-import { COMPLETION_THEME_MANAGER } from '@krassowski/completion-theme';
-import { plugin as THEME_MATERIAL } from '@krassowski/theme-material';
-import { plugin as THEME_VSCODE } from '@krassowski/theme-vscode';
+import { IFormComponentRegistry } from '@jupyterlab/ui-components';
 import { Signal } from '@lumino/signaling';
 
 import '../style/index.css';
 
+import { LanguageServer } from './_plugin';
 import { WIDGET_ADAPTER_MANAGER } from './adapter_manager';
 import { FILE_EDITOR_ADAPTER } from './adapters/file_editor';
 import { NOTEBOOK_ADAPTER } from './adapters/notebook';
@@ -46,6 +52,7 @@ import {
   ICodeOverridesRegistry,
   ILSPCodeOverridesManager
 } from './overrides/tokens';
+import { SettingsUIManager, SettingsSchemaManager } from './settings';
 import {
   IAdapterTypeOptions,
   ILSPAdapterManager,
@@ -88,7 +95,7 @@ export class FeatureManager implements ILSPFeatureManager {
     this.command_manager_registered = new Signal(this);
   }
 
-  register(options: IFeatureOptions): void {
+  private _register(options: IFeatureOptions) {
     if (options.supersedes) {
       for (let option of options.supersedes) {
         this.features = this.features.filter(feature => feature.id != option);
@@ -102,9 +109,28 @@ export class FeatureManager implements ILSPFeatureManager {
       }
       this.command_manager_registered.connect(
         (feature_manager, command_manager) => {
-          command_manager.add(options.feature.commands);
+          if (options.feature.commands) {
+            command_manager.add(options.feature.commands);
+          }
         }
       );
+    }
+  }
+
+  register(options: IFeatureOptions): void {
+    if (options.feature.settings && options.feature.settings.ready) {
+      options.feature.settings.ready
+        .then(() => {
+          if (!options.feature?.settings?.composite.disable) {
+            this._register(options);
+          } else {
+            console.log('Skipping ', options.feature.id, 'as disabled');
+          }
+        })
+        .catch(console.warn);
+      return;
+    } else {
+      this._register(options);
     }
   }
 
@@ -124,12 +150,14 @@ export interface ILSPExtension {
   code_overrides: ICodeOverridesRegistry;
   console: ILSPLogConsole;
   translator: ITranslator;
+  user_console: ILoggerRegistry | null;
 }
 
 export class LSPExtension implements ILSPExtension {
   connection_manager: DocumentConnectionManager;
   language_server_manager: LanguageServerManager;
   feature_manager: ILSPFeatureManager;
+  private _settingsSchemaManager: SettingsSchemaManager;
 
   constructor(
     public app: JupyterFrontEnd,
@@ -137,19 +165,24 @@ export class LSPExtension implements ILSPExtension {
     private palette: ICommandPalette,
     documentManager: IDocumentManager,
     paths: IPaths,
-    adapterManager: ILSPAdapterManager,
+    private adapterManager: ILSPAdapterManager,
     public editor_type_manager: ILSPVirtualEditorManager,
     private code_extractors_manager: ILSPCodeExtractorsManager,
     private code_overrides_manager: ILSPCodeOverridesManager,
     public console: ILSPLogConsole,
     public translator: ITranslator,
-    status_bar: IStatusBar | null
+    public user_console: ILoggerRegistry | null,
+    status_bar: IStatusBar | null,
+    formRegistry: IFormComponentRegistry | null
   ) {
-    const trans = (translator || nullTranslator).load('jupyterlab-lsp');
-    this.language_server_manager = new LanguageServerManager({});
+    const trans = (translator || nullTranslator).load('jupyterlab_lsp');
+    this.language_server_manager = new LanguageServerManager({
+      settings: app.serviceManager.serverSettings,
+      console: this.console.scope('LanguageServerManager')
+    });
     this.connection_manager = new DocumentConnectionManager({
       language_server_manager: this.language_server_manager,
-      console: this.console
+      console: this.console.scope('DocumentConnectionManager')
     });
 
     const statusButtonExtension = new StatusButtonExtension({
@@ -172,23 +205,49 @@ export class LSPExtension implements ILSPExtension {
 
     this.feature_manager = new FeatureManager();
 
+    this._settingsSchemaManager = new SettingsSchemaManager({
+      settingRegistry: this.setting_registry,
+      languageServerManager: this.language_server_manager,
+      trans: trans,
+      console: this.console.scope('SettingsSchemaManager'),
+      restored: app.restored
+    });
+
+    if (formRegistry != null) {
+      const settingsUI = new SettingsUIManager({
+        settingRegistry: this.setting_registry,
+        console: this.console.scope('SettingsUIManager'),
+        languageServerManager: this.language_server_manager,
+        trans: trans,
+        schemaValidated: this._settingsSchemaManager.schemaValidated
+      });
+      // register custom UI field for `language_servers` property
+      formRegistry.addRenderer(
+        'language_servers',
+        settingsUI.renderForm.bind(settingsUI)
+      );
+    }
+
+    this._settingsSchemaManager
+      .setupSchemaTransform(plugin.id)
+      .then(this._activate.bind(this))
+      .catch(this._activate.bind(this));
+  }
+
+  private _activate(): void {
     this.setting_registry
       .load(plugin.id)
-      .then(settings => {
-        // Store the initial server settings, to be sent asynchronously
-        // when the servers are initialized.
-        this.connection_manager.initial_configurations = (settings.composite
-          .language_servers || {}) as TLanguageServerConfigurations;
-
-        settings.changed.connect(() => {
-          this.updateOptions(settings);
+      .then(async settings => {
+        await this._updateOptions(settings, false);
+        settings.changed.connect(async () => {
+          await this._updateOptions(settings, true);
         });
       })
       .catch((reason: Error) => {
         console.error(reason.message);
       });
 
-    adapterManager.registerExtension(this);
+    this.adapterManager.registerExtension(this);
   }
 
   registerAdapterType(
@@ -216,12 +275,32 @@ export class LSPExtension implements ILSPExtension {
     return this.code_overrides_manager.registry;
   }
 
-  private updateOptions(settings: ISettingRegistry.ISettings) {
-    const options = settings.composite;
-
+  private async _updateOptions(
+    settings: ISettingRegistry.ISettings,
+    afterInitialization = false
+  ) {
+    const options = await this._settingsSchemaManager.normalizeSettings(
+      settings.composite as Required<LanguageServer>
+    );
+    // Store the initial server settings, to be sent asynchronously
+    // when the servers are initialized.
     const languageServerSettings = (options.language_servers ||
       {}) as TLanguageServerConfigurations;
-    this.connection_manager.updateServerConfigurations(languageServerSettings);
+
+    this.connection_manager.initial_configurations = languageServerSettings;
+    // TODO: if priorities changed reset connections
+
+    // update the server-independent part of configuration immediately
+    this.connection_manager.updateConfiguration(languageServerSettings);
+    if (afterInitialization) {
+      this.connection_manager.updateServerConfigurations(
+        languageServerSettings
+      );
+    }
+    this.connection_manager.updateLogging(
+      options.logAllCommunication,
+      options.setTrace
+    );
   }
 }
 
@@ -242,7 +321,7 @@ const plugin: JupyterFrontEndPlugin<ILSPFeatureManager> = {
     ILSPLogConsole,
     ITranslator
   ],
-  optional: [IStatusBar],
+  optional: [ILoggerRegistry, IStatusBar, IFormComponentRegistry],
   activate: (app, ...args) => {
     let extension = new LSPExtension(
       app,
@@ -257,7 +336,9 @@ const plugin: JupyterFrontEndPlugin<ILSPFeatureManager> = {
         ILSPCodeOverridesManager,
         ILSPLogConsole,
         ITranslator,
-        IStatusBar | null
+        ILoggerRegistry | null,
+        IStatusBar | null,
+        IFormComponentRegistry | null
       ])
     );
     return extension.feature_manager;

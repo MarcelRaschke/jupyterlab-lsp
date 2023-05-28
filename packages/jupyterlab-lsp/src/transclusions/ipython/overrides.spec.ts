@@ -39,7 +39,7 @@ describe('Default IPython overrides', () => {
       overrides.filter(override => override.scope == 'cell')
     );
     it('overrides cell magics', () => {
-      let override = cell_magics_map.override_for(CELL_MAGIC_EXISTS);
+      let override = cell_magics_map.override_for(CELL_MAGIC_EXISTS)!;
       expect(override).to.equal(
         'get_ipython().run_cell_magic("MAGIC", "", """some text\n""")'
       );
@@ -51,7 +51,7 @@ describe('Default IPython overrides', () => {
     it('works for empty cells', () => {
       // those are not correct syntax, but will happen when users are in the process of writing
       const cell_magic_with_args = '%%MAGIC\n';
-      let override = cell_magics_map.override_for(cell_magic_with_args);
+      let override = cell_magics_map.override_for(cell_magic_with_args)!;
       expect(override).to.equal(
         'get_ipython().run_cell_magic("MAGIC", "", """""")'
       );
@@ -62,7 +62,7 @@ describe('Default IPython overrides', () => {
 
     it('escapes arguments in the first line', () => {
       const cell_magic_with_args = '%%MAGIC "arg in quotes"\ntext';
-      let override = cell_magics_map.override_for(cell_magic_with_args);
+      let override = cell_magics_map.override_for(cell_magic_with_args)!;
       expect(override).to.equal(
         'get_ipython().run_cell_magic("MAGIC", " \\"arg in quotes\\"", """text""")'
       );
@@ -72,7 +72,7 @@ describe('Default IPython overrides', () => {
     });
 
     it('escapes docstrings properly', () => {
-      let override = cell_magics_map.override_for(CELL_MAGIC_WITH_DOCSTRINGS);
+      let override = cell_magics_map.override_for(CELL_MAGIC_WITH_DOCSTRINGS)!;
       expect(override).to.equal(
         'get_ipython().run_cell_magic("MAGIC", "", """' +
           ESCAPED_TEXT_WITH_DOCSTRINGS +
@@ -97,7 +97,7 @@ describe('Default IPython overrides', () => {
       overrides.filter(override => override.scope == 'line')
     );
     it('overrides line magics', () => {
-      let override = line_magics_map.override_for(LINE_MAGIC_WITH_SPACE);
+      let override = line_magics_map.override_for(LINE_MAGIC_WITH_SPACE)!;
       expect(override).to.equal(
         'get_ipython().run_line_magic("MAGIC", " line = dd")'
       );
@@ -108,7 +108,7 @@ describe('Default IPython overrides', () => {
 
     it('overrides x =%ls and x = %ls', () => {
       // this is a corner-case as described in
-      // https://github.com/krassowski/jupyterlab-lsp/issues/281#issuecomment-645286076
+      // https://github.com/jupyter-lsp/jupyterlab-lsp/issues/281#issuecomment-645286076
       let override = line_magics_map.override_for('x =%ls');
       expect(override).to.equal('x =get_ipython().run_line_magic("ls", "")');
 
@@ -133,19 +133,28 @@ describe('Default IPython overrides', () => {
     });
 
     it('escapes arguments', () => {
-      const line_magic_with_args = '%MAGIC "arg"';
-      let override = line_magics_map.override_for(line_magic_with_args);
+      let line_magic_with_args = '%MAGIC "arg"';
+      let override = line_magics_map.override_for(line_magic_with_args)!;
       expect(override).to.equal(
         'get_ipython().run_line_magic("MAGIC", " \\"arg\\"")'
       );
 
       let reverse = line_magics_map.reverse.override_for(override);
       expect(reverse).to.equal(line_magic_with_args);
+
+      line_magic_with_args = '%MAGIC "arg\\"';
+      override = line_magics_map.override_for(line_magic_with_args)!;
+      expect(override).to.equal(
+        'get_ipython().run_line_magic("MAGIC", " \\"arg\\\\\\"")'
+      );
+
+      reverse = line_magics_map.reverse.override_for(override);
+      expect(reverse).to.equal(line_magic_with_args);
     });
 
     it('overrides shell commands', () => {
-      let override = line_magics_map.override_for('!ls -o');
-      expect(override).to.equal('get_ipython().getoutput("ls -o")');
+      let override = line_magics_map.override_for('!ls -o')!;
+      expect(override).to.equal('get_ipython().getoutput("ls -o")')!;
 
       let reverse = line_magics_map.reverse.override_for(override);
       expect(reverse).to.equal('!ls -o');
@@ -176,13 +185,13 @@ describe('Default IPython overrides', () => {
     );
 
     it('overrides pinfo', () => {
-      let override = line_magics_map.override_for('?int');
+      let override = line_magics_map.override_for('?int')!;
       expect(override).to.equal("get_ipython().run_line_magic('pinfo', 'int')");
 
       let reverse = line_magics_map.reverse.override_for(override);
       expect(reverse).to.equal('?int');
 
-      override = line_magics_map.override_for('int?');
+      override = line_magics_map.override_for('int?')!;
       expect(override).to.equal(
         "get_ipython().run_line_magic('pinfo',  'int')"
       );
@@ -192,7 +201,7 @@ describe('Default IPython overrides', () => {
     });
 
     it('overrides pinfo2', () => {
-      let override = line_magics_map.override_for('??int');
+      let override = line_magics_map.override_for('??int')!;
       expect(override).to.equal(
         "get_ipython().run_line_magic('pinfo2', 'int')"
       );
@@ -200,7 +209,7 @@ describe('Default IPython overrides', () => {
       let reverse = line_magics_map.reverse.override_for(override);
       expect(reverse).to.equal('??int');
 
-      override = line_magics_map.override_for('int??');
+      override = line_magics_map.override_for('int??')!;
       expect(override).to.equal(
         "get_ipython().run_line_magic('pinfo2',  'int')"
       );
@@ -208,7 +217,7 @@ describe('Default IPython overrides', () => {
       reverse = line_magics_map.reverse.override_for(override);
       expect(reverse).to.equal('int??');
 
-      override = line_magics_map.override_for('some_func??');
+      override = line_magics_map.override_for('some_func??')!;
       expect(override).to.equal(
         "get_ipython().run_line_magic('pinfo2',  'some_func')"
       );

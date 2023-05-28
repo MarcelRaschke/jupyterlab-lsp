@@ -1,6 +1,6 @@
 {
-  "name": "@krassowski/completion-theme",
-  "version": "3.0.0",
+  "name": "@jupyter-lsp/completion-theme",
+  "version": "3.3.0",
   "description": "Completion theme manager for JupyterLab-LSP",
   "keywords": [
     "jupyter",
@@ -11,20 +11,21 @@
     "theme",
     "completer"
   ],
-  "homepage": "https://github.com/krassowski/jupyterlab-lsp",
+  "homepage": "https://github.com/jupyter-lsp/jupyterlab-lsp",
   "bugs": {
-    "url": "https://github.com/krassowski/jupyterlab-lsp/issues"
+    "url": "https://github.com/jupyter-lsp/jupyterlab-lsp/issues"
   },
   "license": "BSD-3-Clause",
   "author": "JupyterLab-LSP Development Team",
   "files": [
-    "{lib,style,schema,src}/**/*.{d.ts,eot,gif,html,jpg,js,js.map,json,png,svg,woff2,ttf,css,json,ts,tsx,txt,md}"
+    "{lib,style,schema,src}/**/*.{d.ts,eot,gif,html,jpg,js,js.map,json,png,svg,woff2,ttf,css,json,ts,tsx,txt,md}",
+    "LICENSE"
   ],
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "repository": {
     "type": "git",
-    "url": "https://github.com/krassowski/jupyterlab-lsp.git"
+    "url": "https://github.com/jupyter-lsp/jupyterlab-lsp.git"
   },
   "scripts": {
     "build": "tsc -b",
@@ -32,16 +33,16 @@
     "clean": "rimraf lib"
   },
   "devDependencies": {
-    "@jupyterlab/builder": "^3.0.0",
-    "@jupyterlab/ui-components": "^3.0.0",
+    "@jupyterlab/builder": "^3.5.0",
+    "@jupyterlab/ui-components": "^3.3.0",
     "react": "^17.0.1",
     "rimraf": "^3.0.2",
-    "typescript": "~4.1.3"
+    "typescript": "~4.9.4"
   },
   "peerDependencies": {},
   "jupyterlab": {
     "extension": true,
     "schemaDir": "schema",
-    "outputDir": "../../python_packages/jupyterlab_lsp/jupyterlab_lsp/labextensions/@krassowski/completion-theme"
+    "outputDir": "../../python_packages/jupyterlab_lsp/jupyterlab_lsp/labextensions/@jupyter-lsp/completion-theme"
   }
 }

@@ -1,3 +1,7 @@
+import {
+  ILSPCompletionThemeManager,
+  KernelKind
+} from '@jupyter-lsp/completion-theme';
 import { CodeEditor } from '@jupyterlab/codeeditor';
 import {
   CompletionConnector,
@@ -7,12 +11,8 @@ import {
 } from '@jupyterlab/completer';
 import { Session } from '@jupyterlab/services';
 import { LabIcon } from '@jupyterlab/ui-components';
-import {
-  ILSPCompletionThemeManager,
-  KernelKind
-} from '@krassowski/completion-theme/lib/types';
 import { JSONArray, JSONObject } from '@lumino/coreutils';
-import * as lsProtocol from 'vscode-languageserver-types';
+import type * as lsProtocol from 'vscode-languageserver-types';
 
 import { CodeCompletion as LSPCompletionSettings } from '../../_completion';
 import { LSPConnection } from '../../connection';
@@ -49,15 +49,109 @@ export interface ICompletionsReply
   extends CompletionHandler.ICompletionItemsReply {
   // TODO: it is not clear when the source is set here and when on IExtendedCompletionItem.
   //  it might be good to separate the two stages for both interfaces
-  source: ICompletionsSource;
+  source: ICompletionsSource | null;
   items: IExtendedCompletionItem[];
+}
+
+export function transformLSPCompletions<T>(
+  token: CodeEditor.IToken,
+  position_in_token: number,
+  lspCompletionItems: lsProtocol.CompletionItem[],
+  createCompletionItem: (kind: string, match: lsProtocol.CompletionItem) => T,
+  console: ILSPLogConsole
+) {
+  let prefix = token.value.slice(0, position_in_token + 1);
+  let all_non_prefixed = true;
+  let items: T[] = [];
+  lspCompletionItems.forEach(match => {
+    let kind = match.kind ? CompletionItemKind[match.kind] : '';
+
+    // Update prefix values
+    let text = match.insertText ? match.insertText : match.label;
+
+    // declare prefix presence if needed and update it
+    if (text.toLowerCase().startsWith(prefix.toLowerCase())) {
+      all_non_prefixed = false;
+      if (prefix !== token.value) {
+        if (text.toLowerCase().startsWith(token.value.toLowerCase())) {
+          // given a completion insert text "display_table" and two test cases:
+          // disp<tab>data →  display_table<cursor>data
+          // disp<tab>lay  →  display_table<cursor>
+          // we have to adjust the prefix for the latter (otherwise we would get display_table<cursor>lay),
+          // as we are constrained NOT to replace after the prefix (which would be "disp" otherwise)
+          prefix = token.value;
+        }
+      }
+    }
+    // add prefix if needed
+    else if (token.type === 'string' && prefix.includes('/')) {
+      // special case for path completion in strings, ensuring that:
+      //     '/Com<tab> → '/Completion.ipynb
+      // when the returned insert text is `Completion.ipynb` (the token here is `'/Com`)
+      // developed against pyls and pylsp server, may not work well in other cases
+      const parts = prefix.split('/');
+      if (
+        text.toLowerCase().startsWith(parts[parts.length - 1].toLowerCase())
+      ) {
+        let pathPrefix = parts.slice(0, -1).join('/') + '/';
+        match.insertText = pathPrefix + text;
+        // for label removing the prefix quote if present
+        if (pathPrefix.startsWith("'") || pathPrefix.startsWith('"')) {
+          pathPrefix = pathPrefix.substr(1);
+        }
+        match.label = pathPrefix + match.label;
+        all_non_prefixed = false;
+      }
+    }
+
+    let completionItem = createCompletionItem(kind, match);
+
+    items.push(completionItem);
+  });
+  console.debug('Transformed');
+  // required to make the repetitive trigger characters like :: or ::: work for R with R languageserver,
+  // see https://github.com/jupyter-lsp/jupyterlab-lsp/issues/436
+  let prefix_offset = token.value.length;
+  // completion of dictionaries for Python with jedi-language-server was
+  // causing an issue for dic['<tab>'] case; to avoid this let's make
+  // sure that prefix.length >= prefix.offset
+  if (all_non_prefixed && prefix_offset > prefix.length) {
+    prefix_offset = prefix.length;
+  }
+
+  let response = {
+    // note in the ContextCompleter it was:
+    // start: token.offset,
+    // end: token.offset + token.value.length,
+    // which does not work with "from statistics import <tab>" as the last token ends at "t" of "import",
+    // so the completer would append "mean" as "from statistics importmean" (without space!);
+    // (in such a case the typedCharacters is undefined as we are out of range)
+    // a different workaround would be to prepend the token.value prefix:
+    // text = token.value + text;
+    // but it did not work for "from statistics <tab>" and lead to "from statisticsimport" (no space)
+    start: token.offset + (all_non_prefixed ? prefix_offset : 0),
+    end: token.offset + prefix.length,
+    items: items,
+    source: {
+      name: 'LSP',
+      priority: 2
+    }
+  };
+  if (response.start > response.end) {
+    console.warn(
+      'Response contains start beyond end; this should not happen!',
+      response
+    );
+  }
+  return response;
 }
 
 /**
  * A LSP connector for completion handlers.
  */
 export class LSPConnector
-  implements CompletionHandler.ICompletionItemsConnector {
+  implements CompletionHandler.ICompletionItemsConnector
+{
   isDisposed = false;
   private _editor: CodeEditor.IEditor;
   private _connections: Map<VirtualDocument.uri, LSPConnection>;
@@ -130,13 +224,13 @@ export class LSPConnector
     if (this.isDisposed) {
       return;
     }
-    this._connections = null;
-    this.virtual_editor = null;
-    this._context_connector = null;
-    this._kernel_connector = null;
-    this._kernel_and_context_connector = null;
-    this.options = null;
-    this._editor = null;
+    this._connections = null as any;
+    this.virtual_editor = null as any;
+    this._context_connector = null as any;
+    this._kernel_connector = null as any;
+    this._kernel_and_context_connector = null as any;
+    this.options = null as any;
+    this._editor = null as any;
     this.isDisposed = true;
   }
 
@@ -153,7 +247,7 @@ export class LSPConnector
   }
 
   protected async _kernel_language(): Promise<string> {
-    return (await this.options.session.kernel.info).language_info.name;
+    return (await this.options.session!.kernel!.info).language_info.name;
   }
 
   protected get _kernel_timeout(): number {
@@ -175,7 +269,7 @@ export class LSPConnector
     return this.virtual_editor.transform_from_editor_to_root(
       this._editor,
       editor_position
-    );
+    )!;
   }
 
   /**
@@ -185,26 +279,34 @@ export class LSPConnector
    */
   async fetch(
     request: CompletionHandler.IRequest
-  ): Promise<CompletionHandler.ICompletionItemsReply> {
+  ): Promise<CompletionHandler.ICompletionItemsReply | undefined> {
     let editor = this._editor;
 
     const cursor = editor.getCursorPosition();
     const token = editor.getTokenForPosition(cursor);
 
     if (this.trigger_kind == AdditionalCompletionTriggerKinds.AutoInvoked) {
-      if (this.suppress_continuous_hinting_in.indexOf(token.type) !== -1) {
+      if (
+        token.type &&
+        this.suppress_continuous_hinting_in.indexOf(token.type) !== -1
+      ) {
         this.console.debug('Suppressing completer auto-invoke in', token.type);
+        this.trigger_kind = CompletionTriggerKind.Invoked;
         return;
       }
     } else if (this.trigger_kind == CompletionTriggerKind.TriggerCharacter) {
-      if (this.suppress_trigger_character_in.indexOf(token.type) !== -1) {
+      if (
+        token.type &&
+        this.suppress_trigger_character_in.indexOf(token.type) !== -1
+      ) {
         this.console.debug('Suppressing completer auto-invoke in', token.type);
+        this.trigger_kind = CompletionTriggerKind.Invoked;
         return;
       }
     }
 
-    const start = editor.getPositionAt(token.offset);
-    const end = editor.getPositionAt(token.offset + token.value.length);
+    const start = editor.getPositionAt(token.offset)!;
+    const end = editor.getPositionAt(token.offset + token.value.length)!;
 
     let position_in_token = cursor.column - start.column - 1;
     const typed_character = token.value[cursor.column - start.column - 1];
@@ -218,17 +320,15 @@ export class LSPConnector
     // find document for position
     let document = virtual_editor.document_at_root_position(start_in_root);
 
-    let virtual_start = virtual_editor.root_position_to_virtual_position(
-      start_in_root
-    );
-    let virtual_end = virtual_editor.root_position_to_virtual_position(
-      end_in_root
-    );
-    let virtual_cursor = virtual_editor.root_position_to_virtual_position(
-      cursor_in_root
-    );
-    const lsp_promise: Promise<CompletionHandler.ICompletionItemsReply> = this
-      .use_lsp_completions
+    let virtual_start =
+      virtual_editor.root_position_to_virtual_position(start_in_root);
+    let virtual_end =
+      virtual_editor.root_position_to_virtual_position(end_in_root);
+    let virtual_cursor =
+      virtual_editor.root_position_to_virtual_position(cursor_in_root);
+    const lsp_promise: Promise<
+      CompletionHandler.ICompletionItemsReply | undefined
+    > = this.use_lsp_completions
       ? this.fetch_lsp(
           token,
           typed_character,
@@ -238,9 +338,11 @@ export class LSPConnector
           document,
           position_in_token
         )
-      : Promise.resolve(null);
+      : Promise.resolve(undefined);
 
-    let promise: Promise<CompletionHandler.ICompletionItemsReply> = null;
+    let promise: Promise<
+      CompletionHandler.ICompletionItemsReply | undefined
+    > | null = null;
 
     try {
       const kernelTimeout = this._kernel_timeout;
@@ -260,7 +362,9 @@ export class LSPConnector
         // TODO: should it be cashed?
         const kernelLanguage = await this._kernel_language();
 
-        if (document.language === kernelLanguage) {
+        if (
+          document.language.toLocaleLowerCase() === kernelLanguage.toLowerCase()
+        ) {
           let default_kernel_promise = this._kernel_connector.fetch(request);
           let kernel_promise: Promise<CompletionHandler.IReply>;
 
@@ -276,10 +380,10 @@ export class LSPConnector
                 return setTimeout(
                   () =>
                     resolve({
-                      start: null,
-                      end: null,
+                      start: 0,
+                      end: 0,
                       matches: [],
-                      metadata: null
+                      metadata: {}
                     }),
                   kernelTimeout
                 );
@@ -320,7 +424,9 @@ export class LSPConnector
     this.console.debug('All promises set up and ready.');
     return promise.then(reply => {
       reply = this.suppress_if_needed(reply, token, cursor);
-      this.items = reply.items;
+      if (reply) {
+        this.items = reply.items;
+      }
       this.trigger_kind = CompletionTriggerKind.Invoked;
       return reply;
     });
@@ -339,7 +445,7 @@ export class LSPConnector
     document: VirtualDocument,
     position_in_token: number
   ): Promise<ICompletionsReply> {
-    let connection = this.get_connection(document.uri);
+    let connection = this.get_connection(document.uri)!;
 
     this.console.debug('Fetching');
     this.console.debug('Token:', token, start, end);
@@ -363,80 +469,24 @@ export class LSPConnector
     )) || []) as lsProtocol.CompletionItem[];
 
     this.console.debug('Transforming');
-    let prefix = token.value.slice(0, position_in_token + 1);
-    let all_non_prefixed = true;
-    let items: IExtendedCompletionItem[] = [];
-    lspCompletionItems.forEach(match => {
-      let kind = match.kind ? CompletionItemKind[match.kind] : '';
-      let completionItem = new LazyCompletionItem(
-        kind,
-        this.icon_for(kind),
-        match,
-        this,
-        document.uri
-      );
 
-      // Update prefix values
-      let text = match.insertText ? match.insertText : match.label;
-      if (text.toLowerCase().startsWith(prefix.toLowerCase())) {
-        all_non_prefixed = false;
-        if (prefix !== token.value) {
-          if (text.toLowerCase().startsWith(token.value.toLowerCase())) {
-            // given a completion insert text "display_table" and two test cases:
-            // disp<tab>data →  display_table<cursor>data
-            // disp<tab>lay  →  display_table<cursor>
-            // we have to adjust the prefix for the latter (otherwise we would get display_table<cursor>lay),
-            // as we are constrained NOT to replace after the prefix (which would be "disp" otherwise)
-            prefix = token.value;
-          }
-        }
-      }
-
-      items.push(completionItem);
-    });
-    this.console.debug('Transformed');
-    // required to make the repetitive trigger characters like :: or ::: work for R with R languageserver,
-    // see https://github.com/krassowski/jupyterlab-lsp/issues/436
-    let prefix_offset = token.value.length;
-    // completion of dictionaries for Python with jedi-language-server was
-    // causing an issue for dic['<tab>'] case; to avoid this let's make
-    // sure that prefix.length >= prefix.offset
-    if (all_non_prefixed && prefix_offset > prefix.length) {
-      prefix_offset = prefix.length;
-    }
-
-    let response = {
-      // note in the ContextCompleter it was:
-      // start: token.offset,
-      // end: token.offset + token.value.length,
-      // which does not work with "from statistics import <tab>" as the last token ends at "t" of "import",
-      // so the completer would append "mean" as "from statistics importmean" (without space!);
-      // (in such a case the typedCharacters is undefined as we are out of range)
-      // a different workaround would be to prepend the token.value prefix:
-      // text = token.value + text;
-      // but it did not work for "from statistics <tab>" and lead to "from statisticsimport" (no space)
-      start: token.offset + (all_non_prefixed ? prefix_offset : 0),
-      end: token.offset + prefix.length,
-      items: items,
-      source: {
-        name: 'LSP',
-        priority: 2
-      }
-    };
-    if (response.start > response.end) {
-      console.warn(
-        'Response contains start beyond end; this should not happen!',
-        response
-      );
-    }
-
-    return response;
+    return transformLSPCompletions(
+      token,
+      position_in_token,
+      lspCompletionItems,
+      (kind, match) =>
+        new LazyCompletionItem(
+          kind,
+          this.icon_for(kind),
+          match,
+          this,
+          document.uri
+        ),
+      this.console
+    );
   }
 
   protected icon_for(type: string): LabIcon {
-    if (!this.options.settings.composite.theme) {
-      return undefined;
-    }
     if (typeof type === 'undefined') {
       type = KernelKind;
     }
@@ -489,7 +539,7 @@ export class LSPConnector
     replies = replies.filter(reply => {
       if (reply instanceof Error) {
         this.console.warn(
-          `Caught ${reply.source.name} completions error`,
+          `Caught ${reply.source!.name} completions error`,
           reply
         );
         return false;
@@ -502,7 +552,7 @@ export class LSPConnector
       return true;
     });
 
-    replies.sort((a, b) => b.source.priority - a.source.priority);
+    replies.sort((a, b) => b.source!.priority - a.source!.priority);
 
     this.console.debug('Sorted replies:', replies);
 
@@ -516,24 +566,30 @@ export class LSPConnector
     if (minStart != maxStart) {
       const cursor = editor.getCursorPosition();
       const line = editor.getLine(cursor.line);
-
-      replies = replies.map(reply => {
-        // no prefix to strip, return as-is
-        if (reply.start == maxStart) {
-          return reply;
-        }
-        let prefix = line.substring(reply.start, maxStart);
-        this.console.debug(`Removing ${reply.source.name} prefix: `, prefix);
-        return {
-          ...reply,
-          items: reply.items.map(item => {
-            item.insertText = item.insertText.startsWith(prefix)
-              ? item.insertText.substr(prefix.length)
-              : item.insertText;
-            return item;
-          })
-        };
-      });
+      if (line == null) {
+        this.console.warn(
+          `Could not remove prefixes: line is undefined`,
+          cursor.line
+        );
+      } else {
+        replies = replies.map(reply => {
+          // no prefix to strip, return as-is
+          if (reply.start == maxStart) {
+            return reply;
+          }
+          let prefix = line.substring(reply.start, maxStart);
+          this.console.debug(`Removing ${reply.source!.name} prefix: `, prefix);
+          return {
+            ...reply,
+            items: reply.items.map(item => {
+              item.insertText = item.insertText.startsWith(prefix)
+                ? item.insertText.substr(prefix.length)
+                : item.insertText;
+              return item;
+            })
+          };
+        });
+      }
     }
 
     const insertTextSet = new Set<string>();
@@ -555,9 +611,11 @@ export class LSPConnector
         // lead to processing hundreds of suggestions - e.g. from numpy
         // multiple times if multiple sources provide them).
         let processedItem = item as IExtendedCompletionItem;
-        processedItem.source = reply.source;
-        if (!processedItem.icon) {
-          processedItem.icon = reply.source.fallbackIcon;
+        if (reply.source) {
+          processedItem.source = reply.source;
+          if (!processedItem.icon) {
+            processedItem.icon = reply.source.fallbackIcon;
+          }
         }
         processedItems.push(processedItem);
       });
@@ -573,12 +631,7 @@ export class LSPConnector
     };
   }
 
-  list(
-    query: string | undefined
-  ): Promise<{
-    ids: CompletionHandler.IRequest[];
-    values: CompletionHandler.ICompletionItemsReply[];
-  }> {
+  list(query: string | undefined): Promise<any> {
     return Promise.resolve(undefined);
   }
 
@@ -591,10 +644,13 @@ export class LSPConnector
   }
 
   private suppress_if_needed(
-    reply: CompletionHandler.ICompletionItemsReply,
+    reply: CompletionHandler.ICompletionItemsReply | undefined,
     token: CodeEditor.IToken,
     cursor_at_request: CodeEditor.IPosition
   ) {
+    if (reply == null) {
+      return reply;
+    }
     if (!this._editor.hasFocus()) {
       this.console.debug(
         'Ignoring completion response: the corresponding editor lost focus'
@@ -666,7 +722,7 @@ export namespace LSPConnector {
 
     themeManager: ILSPCompletionThemeManager;
 
-    session?: Session.ISessionConnection;
+    session?: Session.ISessionConnection | null;
 
     console: ILSPLogConsole;
   }

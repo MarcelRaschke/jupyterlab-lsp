@@ -1,19 +1,26 @@
 import { IDocumentWidget } from '@jupyterlab/docregistry';
+import { nullTranslator, TranslationBundle } from '@jupyterlab/translation';
 import React from 'react';
 
 import { WidgetAdapter } from '../adapters/adapter';
+import { TLanguageServerSpec } from '../tokens';
 import { VirtualDocument } from '../virtual/document';
 
-export function get_breadcrumbs(
+export function getBreadcrumbs(
   document: VirtualDocument,
   adapter: WidgetAdapter<IDocumentWidget>,
+  trans?: TranslationBundle,
   collapse = true
 ): JSX.Element[] {
+  if (!trans) {
+    trans = nullTranslator.load('');
+  }
   return document.ancestry.map((document: VirtualDocument) => {
     if (!document.parent) {
       let path = document.path;
       if (
         !document.has_lsp_supported_file &&
+        document.file_extension &&
         path.endsWith(document.file_extension)
       ) {
         path = path.slice(0, -document.file_extension.length - 1);
@@ -36,18 +43,18 @@ export function get_breadcrumbs(
     }
     try {
       if (adapter.has_multiple_editors) {
-        let first_line = document.virtual_lines.get(0);
+        let first_line = document.virtual_lines.get(0)!;
         let last_line = document.virtual_lines.get(
           document.last_virtual_line - 1
-        );
+        )!;
 
         let first_cell = adapter.get_editor_index(first_line.editor);
         let last_cell = adapter.get_editor_index(last_line.editor);
 
         let cell_locator =
           first_cell === last_cell
-            ? `cell ${first_cell + 1}`
-            : `cells: ${first_cell + 1}-${last_cell + 1}`;
+            ? trans!.__('cell %1', first_cell + 1)
+            : trans!.__('cells: %1-%2', first_cell + 1, last_cell + 1);
 
         return (
           <span key={document.uri}>
@@ -62,6 +69,17 @@ export function get_breadcrumbs(
   });
 }
 
+/**
+ * @deprecated please use getBreadcrumbs instead; `get_breadcrumbs` will be removed in 4.0
+ */
+export function get_breadcrumbs(
+  document: VirtualDocument,
+  adapter: WidgetAdapter<IDocumentWidget>,
+  collapse = true
+) {
+  return getBreadcrumbs(document, adapter, undefined, collapse);
+}
+
 export function focus_on(node: HTMLElement) {
   if (!node) {
     return;
@@ -73,9 +91,10 @@ export function focus_on(node: HTMLElement) {
 export function DocumentLocator(props: {
   document: VirtualDocument;
   adapter: WidgetAdapter<any>;
+  trans?: TranslationBundle;
 }) {
   let { document, adapter } = props;
-  let target: HTMLElement = null;
+  let target: HTMLElement | null = null;
   if (adapter.has_multiple_editors) {
     let first_line = document.virtual_lines.get(0);
     if (first_line) {
@@ -84,13 +103,28 @@ export function DocumentLocator(props: {
       console.warn('Could not get first line of ', document);
     }
   }
-  let breadcrumbs = get_breadcrumbs(document, adapter);
+  let breadcrumbs = getBreadcrumbs(document, adapter, props.trans);
   return (
     <div
       className={'lsp-document-locator'}
-      onClick={() => focus_on(target ? target : null)}
+      onClick={() => (target ? focus_on(target) : null)}
     >
       {breadcrumbs}
     </div>
+  );
+}
+
+export function ServerLinksList(props: { specification: TLanguageServerSpec }) {
+  return (
+    <ul className={'lsp-server-links-list'}>
+      {Object.entries(props.specification?.urls || {}).map(([name, url]) => (
+        <li key={props.specification.serverId + '-url-' + name}>
+          {name}:{' '}
+          <a href={url} target="_blank" rel="noreferrer">
+            {url}
+          </a>
+        </li>
+      ))}
+    </ul>
   );
 }

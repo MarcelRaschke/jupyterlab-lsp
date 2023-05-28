@@ -1,10 +1,14 @@
+import { ILSPCompletionThemeManager } from '@jupyter-lsp/completion-theme';
 import { JupyterFrontEnd } from '@jupyterlab/application';
 import { CodeEditor } from '@jupyterlab/codeeditor';
-import { CompletionHandler, ICompletionManager } from '@jupyterlab/completer';
+import {
+  CompletionHandler,
+  ICompletionManager,
+  CompleterModel
+} from '@jupyterlab/completer';
 import { IDocumentWidget } from '@jupyterlab/docregistry';
 import { NotebookPanel } from '@jupyterlab/notebook';
 import { IRenderMimeRegistry } from '@jupyterlab/rendermime';
-import { ILSPCompletionThemeManager } from '@krassowski/completion-theme/lib/types';
 import type * as CodeMirror from 'codemirror';
 
 import { CodeCompletion as LSPCompletionSettings } from '../../_completion';
@@ -27,6 +31,8 @@ import { ICompletionData, LSPCompletionRenderer } from './renderer';
 
 const DOC_PANEL_SELECTOR = '.jp-Completer-docpanel';
 const DOC_PANEL_PLACEHOLDER_CLASS = 'lsp-completer-placeholder';
+const LSP_COMPLETER_CLASS = 'lsp-completer';
+const LSP_COMPLETER_ENABLED_CLASS = 'lsp-completer-enabled';
 
 export class CompletionCM extends CodeMirrorIntegration {
   private _completionCharacters: string[];
@@ -40,7 +46,8 @@ export class CompletionCM extends CodeMirrorIntegration {
       this._completionCharacters == null ||
       !this._completionCharacters.length
     ) {
-      this._completionCharacters = this.connection.getLanguageCompletionCharacters();
+      this._completionCharacters =
+        this.connection.getLanguageCompletionCharacters();
     }
     return this._completionCharacters;
   }
@@ -84,8 +91,11 @@ export class CompletionLabIntegration implements IFeatureLabIntegration {
   // TODO: maybe instead of creating it each time, keep a hash map instead?
   protected current_completion_connector: LSPConnector;
   protected current_completion_handler: CompletionHandler;
-  protected current_adapter: WidgetAdapter<IDocumentWidget> = null;
+  protected current_adapter: WidgetAdapter<IDocumentWidget> | null = null;
   protected renderer: LSPCompletionRenderer;
+  private _latestActiveItem: LazyCompletionItem | null = null;
+  private _signalConnected: boolean = false;
+  private _disabled: boolean;
 
   constructor(
     private app: JupyterFrontEnd,
@@ -96,9 +106,8 @@ export class CompletionLabIntegration implements IFeatureLabIntegration {
     private console: ILSPLogConsole,
     private renderMimeRegistry: IRenderMimeRegistry
   ) {
-    const markdown_renderer = this.renderMimeRegistry.createRenderer(
-      'text/markdown'
-    );
+    const markdown_renderer =
+      this.renderMimeRegistry.createRenderer('text/markdown');
     this.renderer = new LSPCompletionRenderer({
       integrator: this,
       markdownRenderer: markdown_renderer,
@@ -107,15 +116,46 @@ export class CompletionLabIntegration implements IFeatureLabIntegration {
     });
     this.renderer.activeChanged.connect(this.active_completion_changed, this);
     this.renderer.itemShown.connect(this.resolve_and_update, this);
-    adapterManager.adapterChanged.connect(this.swap_adapter, this);
+    this._signalConnected = false;
+    this._disabled = false;
+    // TODO: figure out a better way to disable lab integration elements (postpone initialization?)
+    settings.ready
+      .then(() => {
+        this._disabled = settings.composite.disable;
+        if (!settings.composite.disable) {
+          adapterManager.adapterChanged.connect(this.swap_adapter, this);
+          this._signalConnected = true;
+        }
+      })
+      .catch(console.warn);
+
     settings.changed.connect(() => {
-      completionThemeManager.set_theme(this.settings.composite.theme);
-      completionThemeManager.set_icons_overrides(
-        this.settings.composite.typesMap
-      );
-      if (this.current_completion_handler) {
-        this.model.settings.caseSensitive = this.settings.composite.caseSensitive;
-        this.model.settings.includePerfectMatches = this.settings.composite.includePerfectMatches;
+      this._disabled = settings.composite.disable;
+      if (!settings.composite.disable) {
+        document.body.dataset.lspCompleterLayout =
+          this.settings.composite.layout;
+        completionThemeManager.set_theme(this.settings.composite.theme);
+        completionThemeManager.set_icons_overrides(
+          this.settings.composite.typesMap
+        );
+        if (!this._signalConnected) {
+          adapterManager.adapterChanged.connect(this.swap_adapter, this);
+          this._signalConnected = true;
+        }
+      } else {
+        completionThemeManager.set_theme(null);
+        delete document.body.dataset.lspCompleterLayout;
+      }
+      if (
+        this.current_completion_handler &&
+        this.model instanceof LSPCompleterModel
+      ) {
+        this.model.settings.caseSensitive =
+          this.settings.composite.caseSensitive;
+        this.model.settings.includePerfectMatches =
+          this.settings.composite.includePerfectMatches;
+        this.model.settings.preFilterMatches =
+          this.settings.composite.preFilterMatches;
       }
     });
   }
@@ -127,6 +167,9 @@ export class CompletionLabIntegration implements IFeatureLabIntegration {
     item
       .resolve()
       .then(resolvedCompletionItem => {
+        if (item.self !== this._latestActiveItem!.self) {
+          return;
+        }
         this.set_doc_panel_placeholder(false);
         if (resolvedCompletionItem === null) {
           return;
@@ -134,8 +177,12 @@ export class CompletionLabIntegration implements IFeatureLabIntegration {
         this.refresh_doc_panel(item);
       })
       .catch(e => {
-        this.set_doc_panel_placeholder(false);
-        console.warn(e);
+        // disabling placeholder can remove currently displayed documentation,
+        // so only do that if this is really the active item!
+        if (item.self === this._latestActiveItem!.self) {
+          this.set_doc_panel_placeholder(false);
+        }
+        this.console.warn(e);
       });
   }
 
@@ -144,6 +191,7 @@ export class CompletionLabIntegration implements IFeatureLabIntegration {
     active_completion: ICompletionData
   ) {
     let { item } = active_completion;
+    this._latestActiveItem = item;
     if (!item.supportsResolution()) {
       if (item.isDocumentationMarkdown) {
         // TODO: remove once https://github.com/jupyterlab/jupyterlab/pull/9663 is merged and released
@@ -157,6 +205,10 @@ export class CompletionLabIntegration implements IFeatureLabIntegration {
       this.fetchDocumentation(item);
     } else if (item.isResolved()) {
       this.refresh_doc_panel(item);
+    } else {
+      // resolution has already started, but the re-render update could have been invalidated
+      // by user action, so let's ensure the documentation will get shown this time.
+      this.fetchDocumentation(item);
     }
 
     // also fetch completion for the previous and the next item to prevent jitter
@@ -227,7 +279,8 @@ export class CompletionLabIntegration implements IFeatureLabIntegration {
     // connect the new adapter
     if (this.current_adapter.isConnected) {
       this.connect_completion(this.current_adapter);
-      this.set_connector(adapter, { editor: adapter.activeEditor });
+      // TODO: what to do if adapter.activeEditor was just deleted/there is none because focus shifted?
+      this.set_connector(adapter, { editor: adapter.activeEditor! });
     }
     // connect signals to the new adapter
     this.current_adapter.activeEditorChanged.connect(this.set_connector, this);
@@ -255,11 +308,17 @@ export class CompletionLabIntegration implements IFeatureLabIntegration {
       this.renderer
     ) as CompletionHandler;
     let completer = this.completer;
-    completer.addClass('lsp-completer');
-    completer.model = new LSPCompleterModel({
-      caseSensitive: this.settings.composite.caseSensitive,
-      includePerfectMatches: this.settings.composite.includePerfectMatches
-    });
+    if (this._disabled) {
+      completer.removeClass(LSP_COMPLETER_CLASS);
+      completer.model = new CompleterModel();
+    } else {
+      completer.addClass(LSP_COMPLETER_CLASS);
+      completer.model = new LSPCompleterModel({
+        caseSensitive: this.settings.composite.caseSensitive,
+        includePerfectMatches: this.settings.composite.includePerfectMatches,
+        preFilterMatches: this.settings.composite.preFilterMatches
+      });
+    }
   }
 
   protected get completer() {
@@ -267,8 +326,8 @@ export class CompletionLabIntegration implements IFeatureLabIntegration {
     return this.current_completion_handler.completer;
   }
 
-  protected get model(): LSPCompleterModel {
-    return this.completer.model as LSPCompleterModel;
+  protected get model(): LSPCompleterModel | CompleterModel {
+    return this.completer.model as LSPCompleterModel | CompleterModel;
   }
 
   invoke_completer(kind: ExtendedCompletionTriggerKind) {
@@ -299,19 +358,23 @@ export class CompletionLabIntegration implements IFeatureLabIntegration {
     this.current_completion_handler.editor = editor_changed.editor;
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore
-    this.current_completion_handler.connector = this.current_completion_connector;
+    this.current_completion_handler.connector =
+      this.current_completion_connector;
   }
 
   private get current_items() {
     // TODO upstream: allow to get completionItems() without markup
     //   (note: not trivial as _markup() does filtering too)
+    if (!(this.model instanceof LSPCompleterModel)) {
+      return [];
+    }
     return this.model.completionItems();
   }
 
   private get current_index() {
     let completer = this.current_completion_handler.completer;
 
-    // TODO upstream: add getActiveItem() to Completer
+    // TODO: use public activeIndex available since 3.1
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore
     return completer._activeIndex;
@@ -320,15 +383,18 @@ export class CompletionLabIntegration implements IFeatureLabIntegration {
   refresh_doc_panel(item: LazyCompletionItem) {
     let completer = this.current_completion_handler.completer;
 
-    const active: CompletionHandler.ICompletionItem = this.current_items[
-      this.current_index
-    ];
+    const active: CompletionHandler.ICompletionItem =
+      this.current_items[this.current_index];
 
-    if (!item || active.insertText != item.insertText) {
+    if (!item || !active || active.insertText != item.insertText) {
       return;
     }
 
     const docPanel = completer.node.querySelector(DOC_PANEL_SELECTOR);
+    if (!docPanel) {
+      this.console.warn('Could not find completer panel to refresh');
+      return;
+    }
     docPanel.classList.remove(DOC_PANEL_PLACEHOLDER_CLASS);
 
     if (item.documentation) {
@@ -346,9 +412,13 @@ export class CompletionLabIntegration implements IFeatureLabIntegration {
     }
   }
 
-  set_doc_panel_placeholder(enable: boolean) {
+  set_doc_panel_placeholder(enable: boolean): void {
     let completer = this.current_completion_handler.completer;
     const docPanel = completer.node.querySelector(DOC_PANEL_SELECTOR);
+    if (!docPanel) {
+      this.console.warn('Could not find completer panel for placeholder');
+      return;
+    }
     if (enable) {
       docPanel.setAttribute('style', '');
       docPanel.classList.add(DOC_PANEL_PLACEHOLDER_CLASS);
@@ -362,20 +432,22 @@ export class CompletionLabIntegration implements IFeatureLabIntegration {
     adapter: WidgetAdapter<IDocumentWidget>,
     editor: CodeEditor.IEditor
   ) {
-    if (this.current_completion_connector) {
-      delete this.current_completion_connector;
-    }
     this.current_completion_connector = new LSPConnector({
       editor: editor,
       themeManager: this.completionThemeManager,
-      connections: this.current_adapter.connection_manager.connections,
-      virtual_editor: this.current_adapter.virtual_editor,
+      connections: this.current_adapter!.connection_manager.connections,
+      virtual_editor: this.current_adapter!.virtual_editor,
       settings: this.settings,
       labIntegration: this,
       // it might or might not be a notebook panel (if it is not, the sessionContext and session will just be undefined)
-      session: (this.current_adapter.widget as NotebookPanel)?.sessionContext
+      session: (this.current_adapter!.widget as NotebookPanel)?.sessionContext
         ?.session,
       console: this.console
     });
+    if (this._disabled) {
+      editor.host.classList.remove(LSP_COMPLETER_ENABLED_CLASS);
+    } else {
+      editor.host.classList.add(LSP_COMPLETER_ENABLED_CLASS);
+    }
   }
 }

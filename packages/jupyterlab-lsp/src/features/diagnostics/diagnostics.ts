@@ -1,6 +1,6 @@
 import { JupyterFrontEnd } from '@jupyterlab/application';
 import { MainAreaWidget } from '@jupyterlab/apputils';
-import { TranslationBundle } from '@jupyterlab/translation';
+import { nullTranslator, TranslationBundle } from '@jupyterlab/translation';
 import { LabIcon, copyIcon } from '@jupyterlab/ui-components';
 import { Menu } from '@lumino/widgets';
 import type * as CodeMirror from 'codemirror';
@@ -8,10 +8,11 @@ import type * as lsProtocol from 'vscode-languageserver-protocol';
 
 import diagnosticsSvg from '../../../style/icons/diagnostics.svg';
 import { CodeDiagnostics as LSPDiagnosticsSettings } from '../../_diagnostics';
+import { LSPConnection } from '../../connection';
 import { PositionConverter } from '../../converter';
 import { CodeMirrorIntegration } from '../../editor_integration/codemirror';
 import { FeatureSettings } from '../../feature';
-import { DiagnosticSeverity } from '../../lsp';
+import { DiagnosticSeverity, DiagnosticTag } from '../../lsp';
 import { IEditorPosition, IVirtualPosition } from '../../positioning';
 import { DefaultMap, uris_equal } from '../../utils';
 import { CodeMirrorVirtualEditor } from '../../virtual/codemirror_editor';
@@ -49,18 +50,22 @@ function escapeRegExp(string: string) {
 }
 
 class DiagnosticsPanel {
-  private _content: DiagnosticsListing = null;
-  private _widget: MainAreaWidget<DiagnosticsListing> = null;
+  private _content: DiagnosticsListing | null = null;
+  private _widget: MainAreaWidget<DiagnosticsListing> | null = null;
   feature: DiagnosticsCM;
   is_registered = false;
   trans: TranslationBundle;
+
+  constructor(trans: TranslationBundle) {
+    this.trans = trans;
+  }
 
   get widget() {
     if (this._widget == null || this._widget.content.model == null) {
       if (this._widget && !this._widget.isDisposed) {
         this._widget.dispose();
       }
-      this._widget = this.init_widget();
+      this._widget = this.initWidget();
     }
     return this._widget;
   }
@@ -69,7 +74,7 @@ class DiagnosticsPanel {
     return this.widget.content;
   }
 
-  protected init_widget() {
+  protected initWidget() {
     this._content = new DiagnosticsListing(
       new DiagnosticsListing.Model(this.trans)
     );
@@ -77,7 +82,7 @@ class DiagnosticsPanel {
     this._content.addClass('lsp-diagnostics-panel-content');
     const widget = new MainAreaWidget({ content: this._content });
     widget.id = 'lsp-diagnostics-panel';
-    widget.title.label = this.trans?.__('Diagnostics Panel');
+    widget.title.label = this.trans.__('Diagnostics Panel');
     widget.title.closable = true;
     widget.title.icon = diagnosticsIcon;
     return widget;
@@ -94,13 +99,14 @@ class DiagnosticsPanel {
   register(app: JupyterFrontEnd) {
     const widget = this.widget;
 
-    let get_column = (name: string) => {
+    let get_column = (id: string) => {
       // TODO: a hashmap in the panel itself?
       for (let column of widget.content.columns) {
-        if (column.name === name) {
+        if (column.id === id) {
           return column;
         }
       }
+      return undefined;
     };
 
     /** Columns Menu **/
@@ -109,21 +115,21 @@ class DiagnosticsPanel {
 
     app.commands.addCommand(CMD_COLUMN_VISIBILITY, {
       execute: args => {
-        let column = get_column(args['name'] as string);
+        let column = get_column(args['id'] as string)!;
         column.is_visible = !column.is_visible;
         widget.update();
       },
-      label: args => this.trans.__(`${args['name']}`) as string,
+      label: args => this.trans.__(args['id'] as string),
       isToggled: args => {
-        let column = get_column(args['name'] as string);
-        return column.is_visible;
+        let column = get_column(args['id'] as string);
+        return column ? column.is_visible : false;
       }
     });
 
     for (let column of widget.content.columns) {
       columns_menu.addItem({
         command: CMD_COLUMN_VISIBILITY,
-        args: { name: column.name }
+        args: { id: column.id }
       });
     }
     app.contextMenu.addItem({
@@ -138,14 +144,14 @@ class DiagnosticsPanel {
       'Ignore diagnostics like this'
     );
 
-    let get_row = (): IDiagnosticsRow => {
+    let get_row = (): IDiagnosticsRow | undefined => {
       let tr = app.contextMenuHitTest(
         node => node.tagName.toLowerCase() == 'tr'
       );
       if (!tr) {
         return;
       }
-      return this.widget.content.get_diagnostic(tr.dataset.key);
+      return this.widget.content.get_diagnostic(tr.dataset.key!);
     };
 
     ignore_diagnostics_menu.addItem({
@@ -156,7 +162,14 @@ class DiagnosticsPanel {
     });
     app.commands.addCommand(CMD_IGNORE_DIAGNOSTIC_CODE, {
       execute: () => {
-        const diagnostic = get_row().data.diagnostic;
+        const row = get_row();
+        if (!row) {
+          console.warn(
+            'LPS: diagnostics row not found for ignore code execute()'
+          );
+          return;
+        }
+        const diagnostic = row.data.diagnostic;
         let current = this.content.model.settings.composite.ignoreCodes;
         this.content.model.settings.set('ignoreCodes', [
           ...current,
@@ -187,9 +200,15 @@ class DiagnosticsPanel {
     app.commands.addCommand(CMD_IGNORE_DIAGNOSTIC_MSG, {
       execute: () => {
         const row = get_row();
+        if (!row) {
+          console.warn(
+            'LPS: diagnostics row not found for ignore message execute()'
+          );
+          return;
+        }
         const diagnostic = row.data.diagnostic;
-        let current = this.content.model.settings.composite
-          .ignoreMessagesPatterns;
+        let current =
+          this.content.model.settings.composite.ignoreMessagesPatterns;
         this.content.model.settings.set('ignoreMessagesPatterns', [
           ...current,
           escapeRegExp(diagnostic.message)
@@ -220,6 +239,10 @@ class DiagnosticsPanel {
     app.commands.addCommand(CMD_JUMP_TO_DIAGNOSTIC, {
       execute: () => {
         const row = get_row();
+        if (!row) {
+          console.warn('LPS: diagnostics row not found for jump execute()');
+          return;
+        }
         this.widget.content.jump_to(row);
       },
       label: this.trans.__('Jump to location'),
@@ -230,6 +253,7 @@ class DiagnosticsPanel {
       execute: () => {
         const row = get_row();
         if (!row) {
+          console.warn('LPS: diagnostics row not found for copy execute()');
           return;
         }
         const message = row.data.diagnostic.message;
@@ -237,7 +261,7 @@ class DiagnosticsPanel {
           .writeText(message)
           .then(() => {
             this.content.model.status_message.set(
-              this.trans.__(`Successfully copied "%1" to clipboard`, message)
+              this.trans.__('Successfully copied "%1" to clipboard', message)
             );
           })
           .catch(() => {
@@ -274,11 +298,25 @@ class DiagnosticsPanel {
   }
 }
 
-export const diagnostics_panel = new DiagnosticsPanel();
+export const diagnostics_panel = new DiagnosticsPanel(
+  nullTranslator.load('jupyterlab_lsp')
+);
 export const diagnostics_databases = new WeakMap<
   CodeMirrorVirtualEditor,
   DiagnosticsDatabase
 >();
+
+interface IMarkerDefinition {
+  options: CodeMirror.TextMarkerOptions;
+  start: IEditorPosition;
+  end: IEditorPosition;
+  hash: string;
+}
+
+interface IMarkedDiagnostic {
+  editor: CodeMirror.Editor;
+  marker: CodeMirror.TextMarker;
+}
 
 export class DiagnosticsCM extends CodeMirrorIntegration {
   private last_response: lsProtocol.PublishDiagnosticsParams;
@@ -288,7 +326,12 @@ export class DiagnosticsCM extends CodeMirrorIntegration {
   }
 
   register(): void {
-    this.connection_handlers.set('diagnostic', this.handleDiagnostic);
+    // this.connection_handlers.set('diagnostic', this.handleDiagnostic);
+    // TODO: unregister
+    this.connection.serverNotifications[
+      'textDocument/publishDiagnostics'
+    ].connect(this.handleDiagnostic);
+
     this.wrapper_handlers.set('focusin', this.switchDiagnosticsPanelSource);
     this.unique_editor_ids = new DefaultMap(() => this.unique_editor_ids.size);
     this.settings.changed.connect(this.refreshDiagnostics, this);
@@ -308,7 +351,7 @@ export class DiagnosticsCM extends CodeMirrorIntegration {
   }
 
   private unique_editor_ids: DefaultMap<CodeMirror.Editor, number>;
-  private marked_diagnostics: Map<string, CodeMirror.TextMarker> = new Map();
+  private marked_diagnostics: Map<string, IMarkedDiagnostic> = new Map();
   /**
    * Allows access to the most recent diagnostics in context of the editor.
    *
@@ -323,7 +366,7 @@ export class DiagnosticsCM extends CodeMirrorIntegration {
     if (!diagnostics_databases.has(this.virtual_editor)) {
       diagnostics_databases.set(this.virtual_editor, new DiagnosticsDatabase());
     }
-    return diagnostics_databases.get(this.virtual_editor);
+    return diagnostics_databases.get(this.virtual_editor)!;
   }
 
   switchDiagnosticsPanelSource = () => {
@@ -343,7 +386,7 @@ export class DiagnosticsCM extends CodeMirrorIntegration {
     diagnostics_panel.update();
   };
 
-  protected collapse_overlapping_diagnostics(
+  protected collapseOverlappingDiagnostics(
     diagnostics: lsProtocol.Diagnostic[]
   ): Map<lsProtocol.Range, lsProtocol.Diagnostic[]> {
     // because Range is not a primitive type, the equality of the objects having
@@ -373,7 +416,7 @@ export class DiagnosticsCM extends CodeMirrorIntegration {
       let range_id = get_range_id(range);
       range_id_to_range.set(range_id, range);
       if (range_id_to_diagnostics.has(range_id)) {
-        let ranges_list = range_id_to_diagnostics.get(range_id);
+        let ranges_list = range_id_to_diagnostics.get(range_id)!;
         ranges_list.push(diagnostic);
       } else {
         range_id_to_diagnostics.set(range_id, [diagnostic]);
@@ -384,7 +427,7 @@ export class DiagnosticsCM extends CodeMirrorIntegration {
 
     range_id_to_diagnostics.forEach(
       (range_diagnostics: lsProtocol.Diagnostic[], range_id: RangeID) => {
-        let range = range_id_to_range.get(range_id);
+        let range = range_id_to_range.get(range_id)!;
         map.set(range, range_diagnostics);
       }
     );
@@ -402,9 +445,15 @@ export class DiagnosticsCM extends CodeMirrorIntegration {
     const ignoredDiagnosticsCodes = new Set(
       this.settings.composite.ignoreCodes
     );
-    const ignoredMessagesRegExp = this.settings.composite.ignoreMessagesPatterns.map(
-      pattern => new RegExp(pattern)
+    const ignoredSeverities = new Set<number>(
+      this.settings.composite.ignoreSeverities.map(
+        severityName => DiagnosticSeverity[severityName]
+      )
     );
+    const ignoredMessagesRegExp =
+      this.settings.composite.ignoreMessagesPatterns.map(
+        pattern => new RegExp(pattern)
+      );
 
     return diagnostics.filter(diagnostic => {
       let code = diagnostic.code;
@@ -418,6 +467,10 @@ export class DiagnosticsCM extends CodeMirrorIntegration {
         code !== null &&
         ignoredDiagnosticsCodes.has(code.toString())
       ) {
+        return false;
+      }
+      let severity = diagnostic.severity;
+      if (severity && ignoredSeverities.has(severity)) {
         return false;
       }
       let message = diagnostic.message;
@@ -441,9 +494,14 @@ export class DiagnosticsCM extends CodeMirrorIntegration {
 
     // TODO: test case for severity class always being set, even if diagnostic has no severity
 
-    let diagnostics_by_range = this.collapse_overlapping_diagnostics(
+    let diagnostics_by_range = this.collapseOverlappingDiagnostics(
       this.filterDiagnostics(response.diagnostics)
     );
+
+    const markerOptionsByEditor = new Map<
+      CodeMirror.Editor,
+      IMarkerDefinition[]
+    >();
 
     diagnostics_by_range.forEach(
       (diagnostics: lsProtocol.Diagnostic[], range: lsProtocol.Range) => {
@@ -474,12 +532,10 @@ export class DiagnosticsCM extends CodeMirrorIntegration {
         let document: VirtualDocument;
         try {
           // assuming that we got a response for this document
-          let start_in_root = this.transform_virtual_position_to_root_position(
-            start
-          );
-          document = this.virtual_editor.document_at_root_position(
-            start_in_root
-          );
+          let start_in_root =
+            this.transform_virtual_position_to_root_position(start);
+          document =
+            this.virtual_editor.document_at_root_position(start_in_root);
         } catch (e) {
           this.console.warn(
             `Could not place inspections from ${response.uri}`,
@@ -506,7 +562,7 @@ export class DiagnosticsCM extends CodeMirrorIntegration {
 
         if (
           document.virtual_lines
-            .get(start.line)
+            .get(start.line)!
             .skip_inspect.indexOf(document.id_path) !== -1
         ) {
           this.console.log(
@@ -516,19 +572,20 @@ export class DiagnosticsCM extends CodeMirrorIntegration {
           return;
         }
 
-        let highest_severity_code = diagnostics
-          .map(diagnostic => diagnostic.severity || this.defaultSeverity)
-          .sort()[0];
-
-        const severity = DiagnosticSeverity[highest_severity_code];
-
         let ce_editor = document.get_editor_at_virtual_line(start);
-        let cm_editor = this.virtual_editor.ce_editor_to_cm_editor.get(
-          ce_editor
-        );
+        let cm_editor =
+          this.virtual_editor.ce_editor_to_cm_editor.get(ce_editor)!;
 
         let start_in_editor = document.transform_virtual_to_editor(start);
-        let end_in_editor: IEditorPosition;
+        let end_in_editor: IEditorPosition | null;
+
+        if (start_in_editor === null) {
+          this.console.warn(
+            'Start in editor could not be be determined for',
+            diagnostics
+          );
+          return;
+        }
 
         // some servers return strange positions for ends
         try {
@@ -536,6 +593,14 @@ export class DiagnosticsCM extends CodeMirrorIntegration {
         } catch (err) {
           this.console.warn('Malformed range for diagnostic', end);
           end_in_editor = { ...start_in_editor, ch: start_in_editor.ch + 1 };
+        }
+
+        if (end_in_editor === null) {
+          this.console.warn(
+            'End in editor could not be be determined for',
+            diagnostics
+          );
+          return;
         }
 
         let range_in_editor = {
@@ -576,38 +641,109 @@ export class DiagnosticsCM extends CodeMirrorIntegration {
         markers_to_retain.add(diagnostic_hash);
 
         if (!this.marked_diagnostics.has(diagnostic_hash)) {
+          const highestSeverityCode = diagnostics
+            .map(diagnostic => diagnostic.severity || this.defaultSeverity)
+            .sort()[0];
+
+          const severity = DiagnosticSeverity[highestSeverityCode];
+
+          const classNames = [
+            'cm-lsp-diagnostic',
+            'cm-lsp-diagnostic-' + severity
+          ];
+
+          const tags: lsProtocol.DiagnosticTag[] = [];
+          for (let diagnostic of diagnostics) {
+            if (diagnostic.tags) {
+              tags.push(...diagnostic.tags);
+            }
+          }
+          for (const tag of new Set(tags)) {
+            classNames.push('cm-lsp-diagnostic-tag-' + DiagnosticTag[tag]);
+          }
           let options: CodeMirror.TextMarkerOptions = {
             title: diagnostics
               .map(d => d.message + (d.source ? ' (' + d.source + ')' : ''))
               .join('\n'),
-            className: 'cm-lsp-diagnostic cm-lsp-diagnostic-' + severity
+            className: classNames.join(' ')
           };
-          let marker;
-          try {
-            marker = cm_editor
-              .getDoc()
-              .markText(start_in_editor, end_in_editor, options);
-          } catch (e) {
-            this.console.warn(
-              'Marking inspection (diagnostic text) failed:',
-              diagnostics,
-              e
-            );
-            return;
+
+          let optionsList = markerOptionsByEditor.get(cm_editor);
+          if (!optionsList) {
+            optionsList = [];
+            markerOptionsByEditor.set(cm_editor, optionsList);
           }
-          this.marked_diagnostics.set(diagnostic_hash, marker);
+          optionsList.push({
+            options,
+            start: start_in_editor,
+            end: end_in_editor,
+            hash: diagnostic_hash
+          });
         }
       }
     );
 
+    for (const [
+      cmEditor,
+      markerDefinitions
+    ] of markerOptionsByEditor.entries()) {
+      // note: could possibly be wrapped in `requestAnimationFrame()`
+      // at a risk of sometimes having an inconsistent state in database.
+      // note: using `operation()` significantly improves performance.
+      // test cases:
+      //   - one cell with 1000 `math.pi` and `import math`; comment out import,
+      //     wait for 1000 diagnostics, then uncomment import, wait for removal:
+      //     - before:
+      //        - diagnostics show up in: 13.6s (blocking!)
+      //        - diagnostics removal in: 13.2s (blocking!)
+      //     - after:
+      //        - diagnostics show up in: 254ms
+      //        - diagnostics removal in: 160.4ms
+      //   - first open of a notebook with 10 cells, each with 88 diagnostics:
+      //     - before: 2.75s (each time)
+      //     - after 208.75ms (order of magnitude faster!)
+      //   - first open of a notebook with 100 cells, each with 1 diagnostic
+      //       this scenario is expected to have no gain (measures overhead)
+      //     - before 280.34ms, 377ms, 399ms
+      //     - after 385.29ms, 301.97ms, 309.4ms
+      cmEditor.operation(() => {
+        const doc = cmEditor.getDoc();
+        for (const definition of markerDefinitions) {
+          let marker;
+          try {
+            marker = doc.markText(
+              definition.start,
+              definition.end,
+              definition.options
+            );
+          } catch (e) {
+            this.console.warn(
+              'Marking inspection (diagnostic text) failed:',
+              definition,
+              e
+            );
+            return;
+          }
+          this.marked_diagnostics.set(definition.hash, {
+            marker,
+            editor: cmEditor
+          });
+        }
+      });
+    }
+
     // remove the markers which were not included in the new message
-    this.remove_unused_diagnostic_markers(markers_to_retain);
+    this.removeUnusedDiagnosticMarkers(markers_to_retain);
 
     this.diagnostics_db.set(this.virtual_document, diagnostics_list);
   }
 
-  public handleDiagnostic = (response: lsProtocol.PublishDiagnosticsParams) => {
-    if (!uris_equal(response.uri, this.virtual_document.document_info.uri)) {
+  public handleDiagnostic = (
+    connection: LSPConnection,
+    response: lsProtocol.PublishDiagnosticsParams
+  ) => {
+    // use optional chaining operator because the diagnostics message may come late (after the document was disposed)
+    if (!uris_equal(response.uri, this.virtual_document?.document_info?.uri)) {
       return;
     }
 
@@ -632,21 +768,43 @@ export class DiagnosticsCM extends CodeMirrorIntegration {
     diagnostics_panel.update();
   }
 
-  protected remove_unused_diagnostic_markers(to_retain: Set<string>) {
-    this.marked_diagnostics.forEach(
-      (marker: CodeMirror.TextMarker, diagnostic_hash: string) => {
-        if (!to_retain.has(diagnostic_hash)) {
-          this.marked_diagnostics.delete(diagnostic_hash);
-          marker.clear();
+  protected removeUnusedDiagnosticMarkers(to_retain: Set<string>) {
+    const toRemoveByEditor = new Map<
+      CodeMirror.Editor,
+      { marker: CodeMirror.TextMarker; hash: string }[]
+    >();
+
+    for (const [
+      diagnosticHash,
+      markedDiagnostic
+    ] of this.marked_diagnostics.entries()) {
+      if (!to_retain.has(diagnosticHash)) {
+        let diagnosticsList = toRemoveByEditor.get(markedDiagnostic.editor);
+        if (!diagnosticsList) {
+          diagnosticsList = [];
+          toRemoveByEditor.set(markedDiagnostic.editor, diagnosticsList);
         }
+        diagnosticsList.push({
+          marker: markedDiagnostic.marker,
+          hash: diagnosticHash
+        });
       }
-    );
+    }
+
+    for (const [cmEditor, markers] of toRemoveByEditor.entries()) {
+      cmEditor.operation(() => {
+        for (const markerData of markers) {
+          markerData.marker.clear();
+          this.marked_diagnostics.delete(markerData.hash);
+        }
+      });
+    }
   }
 
   remove(): void {
     this.settings.changed.disconnect(this.refreshDiagnostics, this);
     // remove all markers
-    this.remove_unused_diagnostic_markers(new Set());
+    this.removeUnusedDiagnosticMarkers(new Set());
     this.diagnostics_db.clear();
     diagnostics_databases.delete(this.virtual_editor);
     this.unique_editor_ids.clear();

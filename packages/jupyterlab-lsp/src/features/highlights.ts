@@ -4,19 +4,21 @@ import {
 } from '@jupyterlab/application';
 import { CodeEditor } from '@jupyterlab/codeeditor';
 import { ISettingRegistry } from '@jupyterlab/settingregistry';
-import { ITranslator, TranslationBundle } from '@jupyterlab/translation';
 import { LabIcon } from '@jupyterlab/ui-components';
 import { Debouncer } from '@lumino/polling';
 import type * as CodeMirror from 'codemirror';
 import type * as lsProtocol from 'vscode-languageserver-protocol';
 
-import highlightTypeSvg from '../../style/icons/highlight-type.svg';
 import highlightSvg from '../../style/icons/highlight.svg';
 import { CodeHighlights as LSPHighlightsSettings } from '../_highlights';
 import { CodeMirrorIntegration } from '../editor_integration/codemirror';
-import { FeatureSettings, IFeatureCommand } from '../feature';
+import { FeatureSettings } from '../feature';
 import { DocumentHighlightKind } from '../lsp';
-import { IRootPosition, IVirtualPosition } from '../positioning';
+import {
+  IEditorPosition,
+  IRootPosition,
+  IVirtualPosition
+} from '../positioning';
 import { ILSPFeatureManager, PLUGIN_ID } from '../tokens';
 import { VirtualDocument } from '../virtual/document';
 
@@ -25,36 +27,25 @@ export const highlightIcon = new LabIcon({
   svgstr: highlightSvg
 });
 
-export const highlightTypeIcon = new LabIcon({
-  name: 'lsp:highlight-type',
-  svgstr: highlightTypeSvg
-});
-
-const COMMANDS = (trans: TranslationBundle): IFeatureCommand[] => [
-  {
-    id: 'highlight-references',
-    execute: ({ connection, virtual_position, document }) =>
-      connection.getReferences(virtual_position, document.document_info),
-    is_enabled: ({ connection }) => connection.isReferencesSupported(),
-    label: trans.__('Highlight references'),
-    icon: highlightIcon
-  },
-  {
-    id: 'highlight-type-definition',
-    execute: ({ connection, virtual_position, document }) =>
-      connection.getTypeDefinition(virtual_position, document.document_info),
-    is_enabled: ({ connection }) => connection.isTypeDefinitionSupported(),
-    label: trans.__('Highlight type definition'),
-    icon: highlightTypeIcon
-  }
-];
+interface IHighlightDefinition {
+  options: CodeMirror.TextMarkerOptions;
+  start: IEditorPosition;
+  end: IEditorPosition;
+}
 
 export class HighlightsCM extends CodeMirrorIntegration {
-  protected highlight_markers: CodeMirror.TextMarker[] = [];
-  private debounced_get_highlight: Debouncer<lsProtocol.DocumentHighlight[]>;
+  protected highlightMarkers: Map<CodeMirror.Editor, CodeMirror.TextMarker[]> =
+    new Map();
+  /*
+   * @deprecated
+   */
+  protected highlight_markers: CodeMirror.TextMarker[];
+  private debounced_get_highlight: Debouncer<
+    lsProtocol.DocumentHighlight[] | undefined
+  >;
   private virtual_position: IVirtualPosition;
   private sent_version: number;
-  private last_token: CodeEditor.IToken;
+  private last_token: CodeEditor.IToken | null = null;
 
   get settings() {
     return super.settings as FeatureSettings<LSPHighlightsSettings>;
@@ -82,41 +73,105 @@ export class HighlightsCM extends CodeMirrorIntegration {
   };
 
   remove(): void {
-    this.handleHighlight = null;
-    this.onCursorActivity = null;
     this.clear_markers();
     super.remove();
   }
 
   protected clear_markers() {
-    for (let marker of this.highlight_markers) {
-      marker.clear();
+    for (const [cmEditor, markers] of this.highlightMarkers.entries()) {
+      cmEditor.operation(() => {
+        for (const marker of markers) {
+          marker.clear();
+        }
+      });
     }
+    this.highlightMarkers = new Map();
     this.highlight_markers = [];
   }
 
-  protected handleHighlight = (items: lsProtocol.DocumentHighlight[]) => {
+  protected handleHighlight = (
+    items: lsProtocol.DocumentHighlight[] | undefined
+  ) => {
     this.clear_markers();
 
     if (!items) {
       return;
     }
 
+    const highlightOptionsByEditor = new Map<
+      CodeMirror.Editor,
+      IHighlightDefinition[]
+    >();
+
     for (let item of items) {
       let range = this.range_to_editor_range(item.range);
       let kind_class = item.kind
         ? 'cm-lsp-highlight-' + DocumentHighlightKind[item.kind]
         : '';
-      let marker = this.highlight_range(
-        range,
-        'cm-lsp-highlight ' + kind_class
-      );
-      this.highlight_markers.push(marker);
+
+      let optionsList = highlightOptionsByEditor.get(range.editor);
+
+      if (!optionsList) {
+        optionsList = [];
+        highlightOptionsByEditor.set(range.editor, optionsList);
+      }
+      optionsList.push({
+        options: {
+          className: 'cm-lsp-highlight ' + kind_class
+        },
+        start: range.start,
+        end: range.end
+      });
+    }
+
+    for (const [
+      cmEditor,
+      markerDefinitions
+    ] of highlightOptionsByEditor.entries()) {
+      // note: using `operation()` significantly improves performance.
+      // test cases:
+      //   - one cell with 1000 `math.pi` and `import math`; move cursor to `math`,
+      //     wait for 1000 highlights, then move to `pi`:
+      //     - before:
+      //        - highlight `math`: 13.1s
+      //        - then highlight `pi`: 16.6s
+      //     - after:
+      //        - highlight `math`: 160ms
+      //        - then highlight `pi`: 227ms
+      //   - 100 cells with `math.pi` and one with `import math`; move cursor to `math`,
+      //     wait for 1000 highlights, then move to `pi` (this is overhead control,
+      //     no gains expected):
+      //     - before:
+      //        - highlight `math`: 385ms
+      //        - then highlight `pi`: 683 ms
+      //     - after:
+      //        - highlight `math`: 390ms
+      //        - then highlight `pi`: 870ms
+      cmEditor.operation(() => {
+        const doc = cmEditor.getDoc();
+        const markersList: CodeMirror.TextMarker[] = [];
+        for (const definition of markerDefinitions) {
+          let marker;
+          try {
+            marker = doc.markText(
+              definition.start,
+              definition.end,
+              definition.options
+            );
+          } catch (e) {
+            this.console.warn('Marking highlight failed:', definition, e);
+            return;
+          }
+          markersList.push(marker);
+          this.highlight_markers.push(marker);
+        }
+        this.highlightMarkers.set(cmEditor, markersList);
+      });
     }
   };
 
   protected create_debouncer() {
-    return new Debouncer<lsProtocol.DocumentHighlight[]>(
+    return new Debouncer<lsProtocol.DocumentHighlight[] | undefined>(
       this.on_cursor_activity,
       this.settings.composite.debouncerDelay
     );
@@ -183,9 +238,8 @@ export class HighlightsCM extends CodeMirrorIntegration {
     }
 
     try {
-      let virtual_position = this.virtual_editor.root_position_to_virtual_position(
-        root_position
-      );
+      let virtual_position =
+        this.virtual_editor.root_position_to_virtual_position(root_position);
 
       this.virtual_position = virtual_position;
 
@@ -237,24 +291,21 @@ const FEATURE_ID = PLUGIN_ID + ':highlights';
 
 export const HIGHLIGHTS_PLUGIN: JupyterFrontEndPlugin<void> = {
   id: FEATURE_ID,
-  requires: [ILSPFeatureManager, ISettingRegistry, ITranslator],
+  requires: [ILSPFeatureManager, ISettingRegistry],
   autoStart: true,
   activate: (
     app: JupyterFrontEnd,
     featureManager: ILSPFeatureManager,
-    settingRegistry: ISettingRegistry,
-    translator: ITranslator
+    settingRegistry: ISettingRegistry
   ) => {
     const settings = new FeatureSettings(settingRegistry, FEATURE_ID);
-    const trans = translator.load('jupyterlab-lsp');
 
     featureManager.register({
       feature: {
         editorIntegrationFactory: new Map([['CodeMirrorEditor', HighlightsCM]]),
         id: FEATURE_ID,
         name: 'LSP Highlights',
-        settings: settings,
-        commands: COMMANDS(trans)
+        settings: settings
       }
     });
   }

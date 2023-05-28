@@ -18,24 +18,27 @@
 }
 
 /* a workaround for scrollbars being always on in the completer documentation panel, see
- https://github.com/krassowski/jupyterlab-lsp/pull/322#issuecomment-682724175
+ https://github.com/jupyter-lsp/jupyterlab-lsp/pull/322#issuecomment-682724175
  */
-.jp-Completer-docpanel {
+.lsp-completer .jp-Completer-docpanel {
   overflow: auto;
 }
 
-.jp-Completer-match {
-  max-width: 400px;
+.lsp-completer.jp-Completer {
+  --lsp-completer-max-label-width: 350px;
+  --lsp-completer-max-detail-width: 200px;
+}
+
+.lsp-completer .jp-Completer-match {
+  max-width: var(--lsp-completer-max-label-width);
   overflow-x: hidden;
   white-space: nowrap;
   display: block;
   text-overflow: ellipsis;
 }
 
-.jp-mod-active .jp-Completer-match {
-  max-width: 600px;
-  white-space: break-spaces;
-  height: auto;
+.lsp-completer .jp-mod-active .jp-Completer-match {
+  text-overflow: clip;
 }
 
 .lsp-completer-placeholder:after {
@@ -44,6 +47,92 @@
 }
 
 /* a workaround for code being larger font size than text in markdown-rendered panel */
-.jp-Completer-docpanel pre code {
+.lsp-completer .jp-Completer-docpanel pre code {
   font-size: 90%;
+}
+
+body[data-lsp-completer-layout='detail-below'] .jp-Completer-item {
+  --lsp-completer-label-height: 24px;
+  --lsp-completer-detail-height: 20px;
+  --lsp-completer-icon-width: 16px;
+  height: var(--lsp-completer-label-height);
+  display: grid;
+  grid-template-areas:
+    'icon label'
+    'detail detail';
+  grid-template-columns: min-content 1fr;
+}
+
+body[data-lsp-completer-layout='detail-below']
+  .jp-Completer-item.jp-mod-active {
+  height: calc(
+    var(--lsp-completer-detail-height) + var(--lsp-completer-label-height)
+  );
+}
+
+body[data-lsp-completer-layout='detail-below'] .jp-Completer-icon {
+  grid-area: icon;
+  width: var(--lsp-completer-icon-width);
+}
+
+body[data-lsp-completer-layout='detail-below'] .jp-Completer-match {
+  grid-area: label;
+  overflow: hidden;
+  height: var(--lsp-completer-label-height);
+}
+
+.lsp-completer .jp-Completer-item .jp-Completer-typeExtended {
+  max-width: var(--lsp-completer-max-detail-width);
+  min-height: 50px;
+  overflow-x: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lsp-completer .jp-mod-active .jp-Completer-typeExtended {
+  text-overflow: clip;
+}
+
+.lsp-completer mark.lsp-elide:first-child {
+  display: inline-block;
+  overflow-x: clip;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  /* stretch to as much space as possible */
+  flex-shrink: 1;
+  /* always reserve small space to fit the ellipsis */
+  min-width: 20px;
+}
+
+.lsp-completer .lsp-elide-wrapper {
+  display: flex;
+}
+
+body[data-lsp-completer-layout='detail-below'] .jp-Completer-typeExtended {
+  grid-area: detail;
+  text-align: left;
+  padding-left: calc(var(--lsp-completer-icon-width) + 8px);
+  height: var(--lsp-completer-detail-height);
+  line-height: var(--lsp-completer-detail-height);
+  display: none;
+  position: relative;
+  top: -2px;
+  overflow: hidden;
+  max-width: calc(
+    var(--lsp-completer-max-label-width) + var(--lsp-completer-max-detail-width)
+  );
+}
+
+body[data-lsp-completer-layout='detail-below'] .jp-Completer-match {
+  overflow: hidden;
+  max-width: calc(
+    var(--lsp-completer-max-label-width) + var(--lsp-completer-max-detail-width)
+  );
+}
+
+body[data-lsp-completer-layout='detail-below']
+  .jp-Completer-item.jp-mod-active
+  .jp-Completer-typeExtended {
+  display: block;
 }

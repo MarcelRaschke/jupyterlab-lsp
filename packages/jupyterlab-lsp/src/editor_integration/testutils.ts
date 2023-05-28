@@ -12,6 +12,7 @@ import {
   TextModelFactory
 } from '@jupyterlab/docregistry';
 import { FileEditor, FileEditorFactory } from '@jupyterlab/fileeditor';
+import { ILoggerRegistry } from '@jupyterlab/logconsole';
 import * as nbformat from '@jupyterlab/nbformat';
 import {
   Notebook,
@@ -20,7 +21,7 @@ import {
   NotebookPanel
 } from '@jupyterlab/notebook';
 import { ServiceManager } from '@jupyterlab/services';
-import { NBTestUtils } from '@jupyterlab/testutils';
+import { Mock, NBTestUtils } from '@jupyterlab/testutils';
 import { ITranslator } from '@jupyterlab/translation';
 import { Signal } from '@lumino/signaling';
 
@@ -54,6 +55,8 @@ import { EditorAdapter } from './editor_adapter';
 import createNotebookPanel = NBTestUtils.createNotebookPanel;
 import IEditor = CodeEditor.IEditor;
 
+const DEFAULT_SERVER_ID = 'pylsp';
+
 export interface ITestEnvironment {
   document_options: VirtualDocument.IOptions;
 
@@ -71,7 +74,7 @@ export interface ITestEnvironment {
 export class MockLanguageServerManager extends LanguageServerManager {
   async fetchSessions() {
     this._sessions = new Map();
-    this._sessions.set('pyls', {
+    this._sessions.set(DEFAULT_SERVER_ID, {
       spec: {
         languages: ['python']
       }
@@ -87,8 +90,8 @@ export class MockSettings<T> implements IFeatureSettings<T> {
     this.changed = new Signal(this);
   }
 
-  get composite(): T {
-    return this.settings;
+  get composite(): Required<T> {
+    return this.settings as Required<T>;
   }
 
   set(setting: keyof T, value: any): void {
@@ -105,13 +108,16 @@ export class MockExtension implements ILSPExtension {
   foreign_code_extractors: IForeignCodeExtractorsRegistry;
   code_overrides: ICodeOverridesRegistry;
   console: ILSPLogConsole;
+  user_console: ILoggerRegistry;
   translator: ITranslator;
 
   constructor() {
-    this.app = null;
+    this.app = null as any;
     this.feature_manager = new FeatureManager();
     this.editor_type_manager = new VirtualEditorManager();
-    this.language_server_manager = new MockLanguageServerManager({});
+    this.language_server_manager = new MockLanguageServerManager({
+      console: new BrowserConsole()
+    });
     this.connection_manager = new DocumentConnectionManager({
       language_server_manager: this.language_server_manager,
       console: new BrowserConsole()
@@ -124,6 +130,7 @@ export class MockExtension implements ILSPExtension {
     this.foreign_code_extractors = {};
     this.code_overrides = {};
     this.console = new BrowserConsole();
+    this.user_console = null as any;
   }
 }
 
@@ -152,7 +159,15 @@ export abstract class TestEnvironment implements ITestEnvironment {
     let adapter_type = this.get_adapter_type();
     this.adapter = new adapter_type(this.extension, this.widget);
     this.virtual_editor = this.create_virtual_editor();
+    // override the virtual editor with a mock/test one
     this.adapter.virtual_editor = this.virtual_editor;
+    this.adapter.initialized
+      .then(() => {
+        // override it again after initialization
+        // TODO: rewrite tests to async to only override after initialization
+        this.adapter.virtual_editor = this.virtual_editor;
+      })
+      .catch(console.error);
   }
 
   create_virtual_editor(): CodeMirrorVirtualEditor {
@@ -190,7 +205,8 @@ type TestEnvironmentConstructor = new (...args: any[]) => ITestEnvironment;
 function FeatureSupport<TBase extends TestEnvironmentConstructor>(Base: TBase) {
   return class FeatureTestEnvironment
     extends Base
-    implements IFeatureTestEnvironment {
+    implements IFeatureTestEnvironment
+  {
     _connections: Map<CodeMirrorIntegration, LSPConnection>;
 
     init() {
@@ -231,7 +247,7 @@ function FeatureSupport<TBase extends TestEnvironmentConstructor>(Base: TBase) {
     }
 
     public dispose_feature(feature: CodeMirrorIntegration) {
-      let connection = this._connections.get(feature);
+      let connection = this._connections.get(feature)!;
       connection.close();
       feature.is_registered = false;
     }
@@ -240,7 +256,10 @@ function FeatureSupport<TBase extends TestEnvironmentConstructor>(Base: TBase) {
       return new LSPConnection({
         languageId: this.document_options.language,
         serverUri: 'ws://localhost:8080',
-        rootUri: 'file:///unit-test'
+        rootUri: 'file:///unit-test',
+        serverIdentifier: DEFAULT_SERVER_ID,
+        console: new BrowserConsole(),
+        capabilities: {}
       });
     }
 
@@ -267,7 +286,8 @@ export class FileEditorTestEnvironment extends TestEnvironment {
       has_lsp_supported_file: true,
       standalone: true,
       foreign_code_extractors: {},
-      overrides_registry: {}
+      overrides_registry: {},
+      console: new BrowserConsole()
     };
   }
 
@@ -286,13 +306,12 @@ export class FileEditorTestEnvironment extends TestEnvironment {
         fileTypes: ['*']
       }
     });
-    return factory.createNew(
-      new Context({
-        manager: new ServiceManager({ standby: 'never' }),
-        factory: new TextModelFactory(),
-        path: this.document_options.path
-      })
-    );
+    const context = new Context({
+      manager: new Mock.ServiceManagerMock(),
+      factory: new TextModelFactory(),
+      path: this.document_options.path
+    });
+    return factory.createNew(context);
   }
 
   dispose(): void {
@@ -319,7 +338,8 @@ export class NotebookTestEnvironment extends TestEnvironment {
       overrides_registry: {},
       foreign_code_extractors: {},
       has_lsp_supported_file: false,
-      standalone: true
+      standalone: true,
+      console: new BrowserConsole()
     };
   }
 
@@ -391,16 +411,16 @@ export const python_notebook_metadata = {
 export function showAllCells(notebook: Notebook) {
   notebook.show();
   // iterate over every cell to activate the editors
-  for (let i = 0; i < notebook.model.cells.length; i++) {
+  for (let i = 0; i < notebook.model!.cells.length; i++) {
     notebook.activeCellIndex = i;
-    notebook.activeCell.show();
+    notebook.activeCell!.show();
   }
 }
 
 export function getCellsJSON(notebook: Notebook): Array<nbformat.ICell> {
   let cells: Array<ICellModel> = [];
-  for (let i = 0; i < notebook.model.cells.length; i++) {
-    cells.push(notebook.model.cells.get(i));
+  for (let i = 0; i < notebook.model!.cells.length; i++) {
+    cells.push(notebook.model!.cells.get(i));
   }
   return cells.map(cell => cell.toJSON());
 }

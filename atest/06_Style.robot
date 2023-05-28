@@ -1,12 +1,16 @@
 *** Settings ***
-Suite Setup       Setup Suite For Screenshots    style
-Force Tags        ui:editor    aspect:style
-Resource          Keywords.robot
-Resource          Variables.robot
-Library           Collections
+Resource        Keywords.resource
+Resource        Variables.resource
+Library         Collections
+
+Suite Setup     Setup Suite For Screenshots    style
+
+Test Tags       ui:editor    aspect:style
+
 
 *** Variables ***
-${THEME NAMES}    ${EMPTY}
+${THEME NAMES}      ${EMPTY}
+
 
 *** Test Cases ***
 Light
@@ -15,6 +19,7 @@ Light
 Dark
     Screenshot Editor Themes with Lab Theme    JupyterLab Dark
 
+
 *** Keywords ***
 Screenshot Editor Themes with Lab Theme
     [Arguments]    ${lab theme}    ${file}=style.py    ${notebook}=Diagnostic.ipynb
@@ -22,7 +27,9 @@ Screenshot Editor Themes with Lab Theme
     Set Tags    theme:lab:${norm lab theme}
     Set Screenshot Directory    ${SCREENSHOTS DIR}${/}style${/}${norm lab theme}
     Copy File    examples${/}${file}    ${NOTEBOOK DIR}${/}${file}
-    Run Keyword If    "${THEME NAMES}" == ""    Wait Until Keyword Succeeds    3x    1s    Get Theme Names
+    IF    "${THEME NAMES}" == ""
+        Wait Until Keyword Succeeds    3x    1s    Get Theme Names
+    END
     Lab Command    Use Theme: ${lab theme}
     Try to Close All Tabs
     Setup Notebook    python    ${notebook}    isolated=${False}
@@ -35,6 +42,8 @@ Screenshot Editor Themes with Lab Theme
     FOR    ${editor theme}    IN    @{THEME NAMES}
         Capture Theme Screenshot    ${editor theme}
     END
+    # Reset theme
+    Lab Command    Use Theme: JupyterLab Light
     [Teardown]    Clean Up After Working With File    ${file}
 
 Capture Theme Screenshot
@@ -46,12 +55,14 @@ Capture Theme Screenshot
     Capture Page Screenshot    01-editor-${editor theme.replace(' ', '-')}.png
 
 Click the second Accumulate in ${editor}
-    Click Element    //div[contains(@class, 'jp-${editor}')]//div[contains(@class,'CodeMirror')]//span[text() = 'accumulate']
+    Click Element
+    ...    //div[contains(@class, 'jp-${editor}')]//div[contains(@class,'CodeMirror')]//span[text() = 'accumulate']
 
 Change Editor Theme
     [Arguments]    ${editor theme}
     Open Editor Theme Menu
-    ${sel} =    Set Variable    xpath://div[contains(@class, 'lm-Menu-itemLabel')][contains(text(), "${editor theme}")]
+    ${sel} =    Set Variable
+    ...    xpath://div[contains(@class, 'lm-Menu-itemLabel')][contains(text(), "${editor theme}")]
     Wait Until Page Contains Element    ${sel}
     Mouse Over    ${sel}
     Click Element    ${sel}

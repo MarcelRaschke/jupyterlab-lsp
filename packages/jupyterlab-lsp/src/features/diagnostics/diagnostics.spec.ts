@@ -1,6 +1,6 @@
 import { CodeMirrorEditor } from '@jupyterlab/codemirror';
 import { expect } from 'chai';
-import type { TextMarker, TextMarkerOptions } from 'codemirror';
+import type { MarkerRange, TextMarker, TextMarkerOptions } from 'codemirror';
 import type * as lsProtocol from 'vscode-languageserver-protocol';
 
 import { CodeDiagnostics as LSPDiagnosticsSettings } from '../../_diagnostics';
@@ -12,18 +12,24 @@ import {
   set_notebook_content,
   showAllCells
 } from '../../editor_integration/testutils';
+import { DiagnosticSeverity } from '../../lsp';
 import { is_equal } from '../../positioning';
 import { foreign_code_extractors } from '../../transclusions/ipython/extractors';
 
 import { DiagnosticsCM, diagnostics_panel } from './diagnostics';
 import { message_without_code } from './listing';
 
+const SETTING_DEFAULTS: LSPDiagnosticsSettings = {
+  ignoreCodes: [],
+  ignoreMessagesPatterns: [],
+  ignoreSeverities: [],
+  defaultSeverity: 'Warning'
+};
+
 describe('Diagnostics', () => {
   let feature: DiagnosticsCM;
-  let default_settings = new MockSettings<LSPDiagnosticsSettings>({
-    defaultSeverity: 'Warning',
-    ignoreCodes: [],
-    ignoreMessagesPatterns: []
+  let defaultSettings = new MockSettings<LSPDiagnosticsSettings>({
+    ...SETTING_DEFAULTS
   });
 
   describe('FileEditor integration', () => {
@@ -34,7 +40,7 @@ describe('Diagnostics', () => {
       feature = env.init_integration({
         constructor: DiagnosticsCM,
         id: 'Diagnostics',
-        settings: default_settings
+        settings: defaultSettings
       });
     });
     afterEach(() => {
@@ -47,14 +53,15 @@ describe('Diagnostics', () => {
       expect(feature.is_registered).to.equal(true);
     });
 
-    const diagnostics = [
+    const diagnostics: lsProtocol.Diagnostic[] = [
       {
         range: {
           start: { line: 0, character: 7 },
           end: { line: 0, character: 9 }
         },
         message: 'Undefined symbol "aa"',
-        code: 'E001'
+        code: 'E001',
+        severity: DiagnosticSeverity['Error']
       },
       {
         range: {
@@ -62,7 +69,8 @@ describe('Diagnostics', () => {
           end: { line: 1, character: 4 }
         },
         message: 'Trimming whitespace',
-        code: 'W001'
+        code: 'W001',
+        severity: DiagnosticSeverity['Warning']
       }
     ];
 
@@ -77,7 +85,7 @@ describe('Diagnostics', () => {
       markers = env.ce_editor.editor.getDoc().getAllMarks();
       expect(markers.length).to.equal(0);
 
-      feature.handleDiagnostic({
+      feature.handleDiagnostic(null as any, {
         uri: env.document_options.path,
         diagnostics: diagnostics
       });
@@ -91,15 +99,38 @@ describe('Diagnostics', () => {
         constructor: DiagnosticsCM,
         id: 'Diagnostics',
         settings: new MockSettings({
-          defaultSeverity: 'Warning',
-          ignoreCodes: ['W001'],
-          ignoreMessagesPatterns: []
+          ...SETTING_DEFAULTS,
+          ignoreCodes: ['W001']
         })
       });
       env.ce_editor.model.value.text = text;
       await env.adapter.update_documents();
 
-      feature.handleDiagnostic({
+      feature.handleDiagnostic(null as any, {
+        uri: env.document_options.path,
+        diagnostics: diagnostics
+      });
+
+      let markers = env.ce_editor.editor.getDoc().getAllMarks();
+      expect(markers.length).to.equal(1);
+      expect((markers[0] as TextMarkerOptions).title).to.equal(
+        'Undefined symbol "aa"'
+      );
+    });
+
+    it('filters out inspections by severity', async () => {
+      feature = env.init_integration({
+        constructor: DiagnosticsCM,
+        id: 'Diagnostics',
+        settings: new MockSettings({
+          ...SETTING_DEFAULTS,
+          ignoreSeverities: ['Warning']
+        })
+      });
+      env.ce_editor.model.value.text = text;
+      await env.adapter.update_documents();
+
+      feature.handleDiagnostic(null as any, {
         uri: env.document_options.path,
         diagnostics: diagnostics
       });
@@ -116,15 +147,14 @@ describe('Diagnostics', () => {
         constructor: DiagnosticsCM,
         id: 'Diagnostics',
         settings: new MockSettings({
-          defaultSeverity: 'Warning',
-          ignoreCodes: [],
+          ...SETTING_DEFAULTS,
           ignoreMessagesPatterns: ['Undefined symbol "\\w+"']
         })
       });
       env.ce_editor.model.value.text = text;
       await env.adapter.update_documents();
 
-      feature.handleDiagnostic({
+      feature.handleDiagnostic(null as any, {
         uri: env.document_options.path,
         diagnostics: diagnostics
       });
@@ -148,7 +178,7 @@ describe('Diagnostics', () => {
       feature = env.init_integration({
         constructor: DiagnosticsCM,
         id: 'Diagnostics',
-        settings: default_settings
+        settings: defaultSettings
       });
     });
     afterEach(() => {
@@ -167,7 +197,7 @@ describe('Diagnostics', () => {
       let document = env.virtual_editor.virtual_document;
       let uri = env.virtual_editor.virtual_document.uri;
 
-      feature.handleDiagnostic({
+      feature.handleDiagnostic(null as any, {
         uri: uri,
         diagnostics: [
           {
@@ -240,14 +270,14 @@ describe('Diagnostics', () => {
       expect(merged_mark_title).to.contain('\n');
 
       expect(feature.diagnostics_db.size).to.equal(1);
-      expect(feature.diagnostics_db.get(document).length).to.equal(5);
+      expect(feature.diagnostics_db.get(document)!.length).to.equal(5);
 
       feature.switchDiagnosticsPanelSource();
       diagnostics_panel.widget.content.update();
       // the panel should contain all 5 diagnostics
-      let db = diagnostics_panel.content.model.diagnostics;
+      let db = diagnostics_panel.content.model.diagnostics!;
       expect(db.size).to.equal(1);
-      expect(db.get(document).length).to.equal(5);
+      expect(db.get(document)!.length).to.equal(5);
     });
 
     it('Works in foreign documents', async () => {
@@ -266,7 +296,7 @@ describe('Diagnostics', () => {
         constructor: DiagnosticsCM,
         id: 'Diagnostics',
         document: foreign_document,
-        settings: default_settings
+        settings: defaultSettings
       });
 
       let response = {
@@ -285,7 +315,7 @@ describe('Diagnostics', () => {
       } as lsProtocol.PublishDiagnosticsParams;
 
       // test guards against wrongly propagated responses:
-      feature.handleDiagnostic(response);
+      feature.handleDiagnostic(null as any, response);
       let cm_editors = env.adapter.editors.map(
         ce_editor => (ce_editor as CodeMirrorEditor).editor
       );
@@ -297,7 +327,7 @@ describe('Diagnostics', () => {
       expect(marks_cell_2.length).to.equal(0);
 
       // correct propagation
-      foreign_feature.handleDiagnostic(response);
+      foreign_feature.handleDiagnostic(null as any, response);
 
       marks_cell_1 = cm_editors[0].getDoc().getAllMarks();
       marks_cell_2 = cm_editors[1].getDoc().getAllMarks();
@@ -305,16 +335,16 @@ describe('Diagnostics', () => {
       expect(marks_cell_1.length).to.equal(0);
       expect(marks_cell_2.length).to.equal(1);
 
-      let mark = marks_cell_2[0];
+      let mark = marks_cell_2[0] as TextMarker<MarkerRange>;
 
-      let mark_position = mark.find();
+      let mark_position = mark.find()!;
 
       // second line (0th and 1st virtual lines) + 1 line for '%%python\n' => line: 2
       expect(is_equal(mark_position.from, { line: 2, ch: 0 })).to.be.true;
       expect(is_equal(mark_position.to, { line: 2, ch: 1 })).to.be.true;
 
       // the silenced diagnostic for the %%python magic should be ignored
-      feature.handleDiagnostic({
+      feature.handleDiagnostic(null as any, {
         uri: document.uri,
         diagnostics: [
           {

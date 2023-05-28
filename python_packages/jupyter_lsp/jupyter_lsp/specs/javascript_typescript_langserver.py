@@ -13,7 +13,7 @@ class JavascriptTypescriptLanguageServer(NodeModuleSpec):
         "javascriptreact",
     ]
     spec = dict(
-        display_name=key,
+        display_name=key + " (deprecated)",
         mime_types=[
             "application/typescript",
             "text/typescript-jsx",

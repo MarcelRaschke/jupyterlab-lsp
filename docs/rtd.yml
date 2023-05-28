@@ -3,22 +3,31 @@ name: jupyterlab-lsp-docs
 
 channels:
   - conda-forge
+  - nodefaults
 
 dependencies:
-  - nodejs >=12,<13
+  - importlib_metadata
+  - jupyterlab >=3.6.0,<4.0.0a0
+  - myst-nb
+  - nodejs >=16,!=17,<19
+  - pandas
   - pip
-  - python >=3.8,<3.9.0a0
+  - pytest-check-links
+  - python >=3.8,<3.11.0a0
+  - python-graphviz
+  - python-lsp-server
+  - robotframework-lsp
+  - sphinx
+  - sphinx-autodoc-typehints
+  - sphinx-book-theme>=0.3.2 # force recent sphinx-book-theme version
+  # (which does not yet support sphinx 5.0 so instead a very early 0.0.3
+  # version was getting installed); this constraint and the constraint
+  # on pydata-sphinx-theme below can be removed once:
+  # https://github.com/executablebooks/sphinx-book-theme/issues/575
+  # and
+  # https://github.com/executablebooks/sphinx-book-theme/issues/571
+  # are resolved
+  - pydata-sphinx-theme>=0.7.2 # https://github.com/executablebooks/jupyter-book/issues/1569
+  - sphinx-copybutton
   - pip:
       - -e ../python_packages/jupyter_lsp/
-      - graphviz
-      - importlib_metadata
-      - jupyterlab >=3.0.0,<4.0.0a0
-      - nbsphinx >=0.5.0,<0.5.1a0
-      - pandas
-      - pytest-check-links
-      - myst-nb
-      - python-lsp-server
-      - sphinx
-      - sphinx-autodoc-typehints
-      - sphinx-copybutton
-      - sphinx-book-theme

@@ -1,7 +1,11 @@
+import logging
 from pathlib import Path
+from types import SimpleNamespace
 from typing import List
 
 import pytest
+
+from jupyter_lsp import LanguageServerManager
 
 from ..virtual_documents_shadow import (
     EditableFile,
@@ -90,6 +94,20 @@ def shadow_path(tmpdir):
     return str(tmpdir.mkdir(".virtual_documents"))
 
 
+@pytest.fixture
+def manager():
+    manager = LanguageServerManager()
+    manager.language_servers = {
+        "python-lsp-server": {
+            "requires_documents_on_disk": True,
+            "argv": [],
+            "languages": ["python"],
+            "version": 2,
+        }
+    }
+    return manager
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "message_func, content, expected_content",
@@ -99,26 +117,66 @@ def shadow_path(tmpdir):
         [did_save_with_text, "content at save", "content at save"],
     ],
 )
-async def test_shadow(shadow_path, message_func, content, expected_content):
+async def test_shadow(shadow_path, message_func, content, expected_content, manager):
     shadow = setup_shadow_filesystem(Path(shadow_path).as_uri())
     ok_file_path = Path(shadow_path) / "test.py"
 
     message = message_func(ok_file_path.as_uri(), content)
-    result = await shadow("client", message, ["python"], None)
+    result = await shadow("client", message, "python-lsp-server", manager)
     assert isinstance(result, str)
 
-    with open(str(ok_file_path)) as f:  # str is a Python 3.5 relict
+    with open(ok_file_path) as f:
         assert f.read() == expected_content
 
 
 @pytest.mark.asyncio
-async def test_shadow_failures(shadow_path):
+async def test_no_shadow_for_well_behaved_server(
+    shadow_path,
+):
+    """We call server well behaved when it does not require a disk copy"""
+    shadow_path_for_well = Path(shadow_path) / "well"
+    shadow = setup_shadow_filesystem(Path(shadow_path_for_well).as_uri())
+    ok_file_path = Path(shadow_path_for_well) / "test.py"
 
+    manager = SimpleNamespace(
+        language_servers={"python-lsp-server": {"requires_documents_on_disk": False}}
+    )
+
+    message = did_open(ok_file_path.as_uri(), "content\nof\nopened\nfile")
+    result = await shadow("client", message, "python-lsp-server", manager)
+    # should short-circuit for well behaved server
+    assert result is None
+    # should not create the directory
+    assert not shadow_path_for_well.exists()
+
+
+@pytest.mark.asyncio
+async def test_shadow_created_for_ill_behaved_server(
+    shadow_path,
+):
+    shadow_path_for_ill = Path(shadow_path) / "ill"
+    shadow = setup_shadow_filesystem(shadow_path_for_ill.as_uri())
+    ok_file_path = Path(shadow_path_for_ill) / "test.py"
+
+    manager = SimpleNamespace(
+        language_servers={"python-lsp-server": {"requires_documents_on_disk": True}}
+    )
+
+    message = did_open(ok_file_path.as_uri(), "content\nof\nopened\nfile")
+    result = await shadow("client", message, "python-lsp-server", manager)
+    assert result is not None
+    # should create the directory at given path
+    assert shadow_path_for_ill.exists()
+    assert shadow_path_for_ill.is_dir()
+
+
+@pytest.mark.asyncio
+async def test_shadow_failures(shadow_path, manager):
     shadow = setup_shadow_filesystem(Path(shadow_path).as_uri())
     ok_file_uri = (Path(shadow_path) / "test.py").as_uri()
 
     def run_shadow(message):
-        return shadow("client", message, ["python"], None)
+        return shadow("client", message, "python-lsp-server", manager)
 
     # missing textDocument
     with pytest.raises(ShadowFilesystemError, match="Could not get textDocument from"):
@@ -150,3 +208,44 @@ async def test_shadow_failures(shadow_path):
                 "params": {"textDocument": {"uri": ok_file_uri}},
             }
         )
+
+
+@pytest.fixture
+def forbidden_shadow_path(tmpdir):
+    path = Path(tmpdir) / "no_permission_dir"
+    path.mkdir()
+    path.chmod(0o000)
+
+    yield path
+
+    # re-adjust the permissions, see https://github.com/pytest-dev/pytest/issues/7821
+    path.chmod(0o755)
+
+
+@pytest.mark.asyncio
+async def test_io_failure(forbidden_shadow_path, manager, caplog):
+    file_uri = (forbidden_shadow_path / "test.py").as_uri()
+
+    shadow = setup_shadow_filesystem(forbidden_shadow_path.as_uri())
+
+    def send_change():
+        message = did_open(file_uri, "content")
+        return shadow("client", message, "python-lsp-server", manager)
+
+    with caplog.at_level(logging.WARNING):
+        assert await send_change() is None
+        assert await send_change() is None
+    # no message should be emitted during the first two attempts
+    assert caplog.text == ""
+
+    # a wargning should be emitted on third failure
+    with caplog.at_level(logging.WARNING):
+        assert await send_change() is None
+    assert "initialization of shadow filesystem failed three times" in caplog.text
+    assert "PermissionError" in caplog.text
+    caplog.clear()
+
+    # no message should be emitted in subsequent attempts
+    with caplog.at_level(logging.WARNING):
+        assert await send_change() is None
+    assert caplog.text == ""

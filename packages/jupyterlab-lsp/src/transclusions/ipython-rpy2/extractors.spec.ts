@@ -6,6 +6,7 @@ import {
   get_the_only_virtual,
   wrap_in_python_lines
 } from '../../extractors/testutils';
+import { BrowserConsole } from '../../virtual/console';
 import { VirtualDocument } from '../../virtual/document';
 
 import { foreign_code_extractors } from './extractors';
@@ -25,7 +26,8 @@ describe('IPython rpy2 extractors', () => {
       foreign_code_extractors: foreign_code_extractors,
       standalone: false,
       file_extension: 'py',
-      has_lsp_supported_file: false
+      has_lsp_supported_file: false,
+      console: new BrowserConsole()
     });
   });
 
@@ -34,6 +36,14 @@ describe('IPython rpy2 extractors', () => {
   });
 
   describe('%R line magic', () => {
+    it('should not extract parts of non-code commands', () => {
+      let code = wrap_in_python_lines('%Rdevice svg');
+      let { cell_code_kept, foreign_document_map } = extract(code);
+
+      expect(cell_code_kept).to.equal(code);
+      expect(foreign_document_map.size).to.equal(0);
+    });
+
     it('correctly gives ranges in source', () => {
       let code = '%R ggplot()';
       let { foreign_document_map } = extract(code);

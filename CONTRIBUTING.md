@@ -21,21 +21,19 @@ You can contribute to the project through:
 
 Thank you for all your contributions :heart:
 
-[license]: https://github.com/krassowski/jupyterlab-lsp/blob/master/LICENSE
+[license]: https://github.com/jupyter-lsp/jupyterlab-lsp/blob/master/LICENSE
 [extending]: ./docs/Extending.html
 [roadmap]: ./docs/Roadmap.html
-[jupyterlab-lsp]: https://github.com/krassowski/jupyterlab-lsp.git
+[jupyterlab-lsp]: https://github.com/jupyter-lsp/jupyterlab-lsp.git
 [code-of-conduct]: https://github.com/jupyter/governance/blob/master/conduct/code_of_conduct.md
 
 ### Set up the environment
 
 Development requires, at a minimum:
 
-- `nodejs >=12,<15`
-- `python >=3.6,<3.9.0a0`
-  - Python 3.7 and 3.8 are also tested on CI
-  - Python 3.6 has issues on Windows
-- `jupyterlab >=3.0.0,<4.0.0a0`
+- `nodejs >=16,!=17,<19`
+- `python >=3.8,<3.11.0a0`
+- `jupyterlab >=3.6.0,<4.0.0a0`
 
 It is recommended to use a virtual environment (e.g. `virtualenv` or `conda env`)
 for development.
@@ -44,7 +42,7 @@ To use the same environment as the binder demo (recommended):
 
 ```bash
 conda env update -n jupyterlab-lsp --file binder/environment.yml # create a conda env
-source activate jupyterlab-lsp                                   # activate it
+conda activate jupyterlab-lsp                                    # activate it
 ```
 
 Or with `pip`:
@@ -85,6 +83,8 @@ to JupyterLab for development:
 jlpm bootstrap
 # if you installed `jupyterlab_lsp` before uninstall it before running the next line
 jupyter labextension develop python_packages/jupyterlab_lsp/ --overwrite
+# optional, only needed for running a few tests for behaviour with missing language servers
+jupyter labextension develop python_packages/klingon_ls_specification/ --overwrite
 ```
 
 > Note: on Windows you may need to enable Developer Mode first, as discussed in [jupyterlab#9564](https://github.com/jupyterlab/jupyterlab/issues/9564)
@@ -316,6 +316,8 @@ python scripts/combine.py
   set FIREFOX_BINARY=C:\path\to\firefox.exe   # ... windows
   ```
 
+- If you see `Element ... could not be scrolled into view` in the `Open Context Menu for File` step check if you have an alternative file browser installed (such as `jupyterlab-unfold`) which might interfere with testing (it is recommended to run the tests in an separated environment)
+
 ### Formatting
 
 Minimal code style is enforced with `pytest-flake8` during unit testing. If installed,
@@ -330,7 +332,7 @@ python scripts/lint.py
 
 ### Specs
 
-While language servers can be configured by the user using a simple JSON or Python [configuration file](./Configuring.html#language-servers),
+While language servers can be configured by the user using a simple JSON or Python [configuration file](./docs/Configuring.ipynb),
 it is preferable to provide users with an option that does not require manual configuration. The language server specifications (specs)
 wrap the configuration (as would be defined by the user) into a Python class or function that can be either:
 
@@ -359,7 +361,7 @@ A spec is a Python callable (a function, or a class with `__call__` method) that
 
 The above example is only intended as an illustration and not as an up-to-date guide.
 For details on the dictionary contents, see the [schema][] definition and [built-in specs][].
-Basic concepts (meaning of the `argv` and `languages` arguments) are also explained in the [configuration files](./Configuring.html#language-servers) documentation.
+Basic concepts (meaning of the `argv` and `languages` arguments) are also explained in the [configuration files](./docs/Configuring.ipynb) documentation.
 
 When contributing a specification we recommend to make use of the helper classes and other [utilities][] that take care of the common use-cases:
 
@@ -376,10 +378,10 @@ The spec should only be advertised if the command _could actually_ be run:
 
 otherwise an empty dictionary (`{}`) should be returned.
 
-[built-in specs]: https://github.com/krassowski/jupyterlab-lsp/tree/master/python_packages/jupyter_lsp/jupyter_lsp/specs
-[setup.cfg]: https://github.com/krassowski/jupyterlab-lsp/blob/master/python_packages/jupyter_lsp/setup.cfg
-[schema]: https://github.com/krassowski/jupyterlab-lsp/blob/master/python_packages/jupyter_lsp/jupyter_lsp/schema/schema.json
-[utilities]: https://github.com/krassowski/jupyterlab-lsp/blob/master/python_packages/jupyter_lsp/jupyter_lsp/specs/utils.py
+[built-in specs]: https://github.com/jupyter-lsp/jupyterlab-lsp/tree/master/python_packages/jupyter_lsp/jupyter_lsp/specs
+[setup.cfg]: https://github.com/jupyter-lsp/jupyterlab-lsp/blob/master/python_packages/jupyter_lsp/setup.cfg
+[schema]: https://github.com/jupyter-lsp/jupyterlab-lsp/blob/master/python_packages/jupyter_lsp/jupyter_lsp/schema/schema.json
+[utilities]: https://github.com/jupyter-lsp/jupyterlab-lsp/blob/master/python_packages/jupyter_lsp/jupyter_lsp/specs/utils.py
 
 ##### Common Concerns
 
@@ -393,8 +395,8 @@ otherwise an empty dictionary (`{}`) should be returned.
   - use a helper script to encapsulate some complexity, or
   - use a command argument of the interpreter is available (see the [r spec][] and [julia spec] for examples)
 
-[r spec]: https://github.com/krassowski/jupyterlab-lsp/blob/master/python_packages/jupyter_lsp/jupyter_lsp/specs/r_languageserver.py
-[julia spec]: https://github.com/krassowski/jupyterlab-lsp/blob/master/python_packages/jupyter_lsp/jupyter_lsp/specs/julia_language_server.py
+[r spec]: https://github.com/jupyter-lsp/jupyterlab-lsp/blob/master/python_packages/jupyter_lsp/jupyter_lsp/specs/r_languageserver.py
+[julia spec]: https://github.com/jupyter-lsp/jupyterlab-lsp/blob/master/python_packages/jupyter_lsp/jupyter_lsp/specs/julia_language_server.py
 
 ##### Example: making a pip-installable `cool-language-server` spec
 

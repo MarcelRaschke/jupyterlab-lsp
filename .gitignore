@@ -110,12 +110,15 @@ node_modules
 *.tgz
 
 atest/output/
+.pabotsuitenames
 junit.xml
 coverage/
 .vscode/
 _*.d.ts
+_*.ts
 _build
 .virtual_documents/
+.idea/
 
 # Built labextensions
-python_packages/jupyterlab_lsp/jupyterlab_lsp/labextensions/
+python_packages/*/*/labextensions/

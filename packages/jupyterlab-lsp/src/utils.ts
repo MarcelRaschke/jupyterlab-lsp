@@ -2,7 +2,7 @@ import { PageConfig } from '@jupyterlab/coreutils';
 import { ReadonlyJSONObject, ReadonlyJSONValue } from '@lumino/coreutils';
 import mergeWith from 'lodash.mergewith';
 
-const RE_PATH_ANCHOR = /^file:\/\/([^\/]+|\/[A-Z]:)/;
+const RE_PATH_ANCHOR = /^file:\/\/([^\/]+|\/[a-zA-Z](?::|%3A))/;
 
 export async function sleep(timeout: number) {
   return new Promise<void>(resolve => {
@@ -103,7 +103,7 @@ export class DefaultMap<K, V> extends Map<K, V> {
 
   get_or_create(k: K, ...args: any[]): V {
     if (this.has(k)) {
-      return super.get(k);
+      return super.get(k)!;
     } else {
       let v = this.default_factory(k, ...args);
       this.set(k, v);
@@ -142,7 +142,11 @@ export function is_win_path(uri: string) {
  * lowercase the drive component of a URI
  */
 export function normalize_win_path(uri: string) {
-  return uri.replace(RE_PATH_ANCHOR, it => it.toLowerCase());
+  // Pyright encodes colon on Windows, see:
+  // https://github.com/jupyter-lsp/jupyterlab-lsp/pull/587#issuecomment-844225253
+  return uri.replace(RE_PATH_ANCHOR, it =>
+    it.replace('%3A', ':').toLowerCase()
+  );
 }
 
 export function uri_to_contents_path(child: string, parent?: string) {
@@ -151,7 +155,8 @@ export function uri_to_contents_path(child: string, parent?: string) {
     return null;
   }
   if (child.startsWith(parent)) {
-    return decodeURI(child.replace(parent, ''));
+    // 'decodeURIComponent' is needed over 'decodeURI' for '@' in TS/JS paths
+    return decodeURIComponent(child.replace(parent, ''));
   }
   return null;
 }
@@ -193,3 +198,53 @@ export const expandDottedPaths = (
   }
   return mergeWith({}, ...settings);
 };
+
+interface ICollapsingResult {
+  result: Record<string, ReadonlyJSONValue>;
+  conflicts: Record<string, any[]>;
+}
+
+export function collapseToDotted(obj: ReadonlyJSONObject): ICollapsingResult {
+  const result: Record<string, ReadonlyJSONValue> = {};
+  const conflicts: Record<string, any[]> = {};
+
+  const collapse = (obj: any, root = ''): void => {
+    for (let [key, value] of Object.entries(obj)) {
+      const prefix = root ? root + '.' + key : key;
+      if (
+        value != null &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        Object.keys(value!).length !== 0
+      ) {
+        collapse(value, prefix);
+      } else {
+        if (result.hasOwnProperty(prefix) && result[prefix] !== value) {
+          if (!conflicts.hasOwnProperty(prefix)) {
+            conflicts[prefix] = [];
+            conflicts[prefix].push(result[prefix]);
+          }
+          if (!conflicts[prefix].includes(value)) {
+            conflicts[prefix].push(value);
+          }
+        }
+        result[prefix] = value as ReadonlyJSONValue;
+      }
+    }
+  };
+  collapse(obj);
+
+  return {
+    result: result as any as ReadonlyJSONObject,
+    conflicts: conflicts
+  };
+}
+
+export function escapeMarkdown(text: string) {
+  // note: keeping backticks for highlighting of code sections
+  text = text.replace(/([\\#*_[\]])/g, '\\$1');
+  // escape HTML
+  const span = document.createElement('span');
+  span.textContent = text;
+  return span.innerHTML.replace(/\n/g, '<br>').replace(/ {2}/g, '\u00A0\u00A0');
+}
